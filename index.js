@@ -1,7 +1,7 @@
-// 重生成拼接 v0.2.0
+// 重生成拼接 v0.3.0
 // 1. 点「重新生成」时，把被删掉的旧回复塞回新回复的 swipes 里，左右翻就能看到
 // 2. 悬浮球菜单：本楼拼接、角色卡、用户人设、世界书，都在同一个上下分屏面板里改
-// 3. 角色卡 / 人设 / 世界书保存时自动留存改前改后，可在参考区对比
+// 3. 角色卡 / 人设 / 世界书：可存多个命名版本随时切换；保存时自动留存改前改后，可在参考区对比
 
 const MODULE = 'regenSplice';
 
@@ -12,7 +12,8 @@ const DEFAULTS = {
     ballSize: 46,      // 悬浮球直径（像素）
     ballPos: null,     // 悬浮球位置，拖动后自动记录，不用手动改
     ballImage: '',     // 悬浮球图片：上传后自动生成，也可以填图片链接；留空用默认图标
-    ballImageSize: 160, // 上传图片压缩后的边长（像素），越大越清晰、占的空间越多
+    ballImageSize: 160, // 上传图片压缩后最长边（像素），越大越清晰、占的空间越多
+    ballShape: 'original', // 有图片时的形状：original = 图片原形状，circle = 裁成圆形
     splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
 };
@@ -172,7 +173,7 @@ function db() {
     return dbPromise;
 }
 
-async function getSnaps(key) {
+async function idbGet(key) {
     try {
         const d = await db();
         return await new Promise(res => {
@@ -185,35 +186,64 @@ async function getSnaps(key) {
     }
 }
 
-async function addSnaps(key, before, after) {
+async function idbPut(key, value) {
     try {
-        let arr = await getSnaps(key);
-        const push = text => {
-            if (!arr.length || arr[arr.length - 1].text !== text) arr.push({ time: Date.now(), text });
-        };
-        push(before);
-        push(after);
-        const max = Math.max(2, parseInt(settings().snapKeep) || DEFAULTS.snapKeep);
-        if (arr.length > max) arr = arr.slice(-max);
         const d = await db();
         await new Promise(res => {
             const tx = d.transaction('snaps', 'readwrite');
-            tx.objectStore('snaps').put(arr, key);
+            tx.objectStore('snaps').put(value, key);
             tx.oncomplete = res;
             tx.onerror = res;
         });
     } catch (e) {
-        console.warn('[重生成拼接] 存档失败', e);
+        console.warn('[重生成拼接] 存储失败', e);
     }
 }
 
-async function snapRefs(key, initial) {
-    const snaps = (await getSnaps(key)).slice().reverse();
+const getSnaps = key => idbGet(key);
+const getVers = key => idbGet('ver:' + key);
+const putVers = (key, arr) => idbPut('ver:' + key, arr);
+
+// 保存时自动存档（改前 + 改后）
+async function addSnaps(key, before, after) {
+    let arr = await getSnaps(key);
+    const push = text => {
+        if (!arr.length || arr[arr.length - 1].text !== text) arr.push({ time: Date.now(), text });
+    };
+    push(before);
+    push(after);
+    const max = Math.max(2, parseInt(settings().snapKeep) || DEFAULTS.snapKeep);
+    if (arr.length > max) arr = arr.slice(-max);
+    await idbPut(key, arr);
+}
+
+// 参考下拉框：打开时 → 自己存的版本（★）→ 自动存档
+async function buildRefs(key, initial) {
     const refs = [{ label: '打开时', text: initial }];
-    snaps.forEach(s => {
-        if (s.text !== initial) refs.push({ label: `存档 ${fmtTime(s.time)}`, text: s.text });
+    (await getVers(key)).forEach(v => refs.push({ label: `★ ${v.name}`, text: v.text, verId: v.id }));
+    (await getSnaps(key)).slice().reverse().forEach(sn => {
+        if (sn.text !== initial) refs.push({ label: `存档 ${fmtTime(sn.time)}`, text: sn.text });
     });
     return refs;
+}
+
+// 酒馆自带弹窗（手机 app 里系统弹窗可能不显示）
+async function askConfirm(msg) {
+    const c = ctx();
+    if (c.callGenericPopup && c.POPUP_TYPE) {
+        const r = await c.callGenericPopup(msg, c.POPUP_TYPE.CONFIRM);
+        return r === 1 || r === true;
+    }
+    return window.confirm(msg);
+}
+
+async function askInput(msg, def = '') {
+    const c = ctx();
+    if (c.callGenericPopup && c.POPUP_TYPE) {
+        const r = await c.callGenericPopup(msg, c.POPUP_TYPE.INPUT, def);
+        return typeof r === 'string' ? r : null;
+    }
+    return window.prompt(msg, def);
 }
 
 // ───── 各种编辑对象 ─────
@@ -285,7 +315,8 @@ async function charTarget(field = 'description') {
         kind: 'char',
         title: `角色卡：${escapeHtml(ch.name)}`,
         pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
-        refs: await snapRefs(key, initial),
+        refs: await buildRefs(key, initial),
+        key,
         ref: 0,
         initial,
         saveLabel: '保存',
@@ -326,7 +357,8 @@ async function personaTarget() {
         kind: 'persona',
         title: `用户人设：${escapeHtml(c.name1)}`,
         pickers: '',
-        refs: await snapRefs(key, initial),
+        refs: await buildRefs(key, initial),
+        key,
         ref: 0,
         initial,
         saveLabel: '保存',
@@ -384,9 +416,12 @@ async function worldTarget(book, uid) {
         kind: 'world',
         title: '世界书',
         pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
-<select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>`,
+<select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>
+${wiToggleHtml(!entry.disable)}`,
         book,
-        refs: await snapRefs(key, initial),
+        uid: entry.uid,
+        refs: await buildRefs(key, initial),
+        key,
         ref: 0,
         initial,
         saveLabel: '保存',
@@ -405,6 +440,32 @@ async function worldTarget(book, uid) {
             return true;
         },
     };
+}
+
+function wiToggleHtml(on) {
+    return `<div class="rs_wi_toggle ${on ? 'rs_on' : ''}" title="启用或禁用这个条目">
+<i class="fa-solid ${on ? 'fa-toggle-on' : 'fa-toggle-off'}"></i><span>${on ? '启用' : '禁用'}</span></div>`;
+}
+
+async function toggleWorldEntry() {
+    const t = state.target;
+    if (t?.kind !== 'world' || t.uid === undefined) return;
+    const c = ctx();
+    const fresh = await c.loadWorldInfo(t.book);
+    const entry = fresh?.entries?.[t.uid];
+    if (!entry) {
+        toastr.error('这个条目已经不存在了');
+        return;
+    }
+    entry.disable = !entry.disable;
+    await c.saveWorldInfo(t.book, fresh, true);
+    try { c.reloadWorldInfoEditor?.(t.book, false); } catch { /* 编辑器没打开时忽略 */ }
+
+    const on = !entry.disable;
+    $('#rs_panel .rs_wi_toggle').replaceWith(wiToggleHtml(on));
+    const $opt = $(`#rs_panel .rs_pick[data-pick="entry"] option[value="${t.uid}"]`);
+    $opt.text($opt.text().replace(/（已禁用）$/, '') + (on ? '' : '（已禁用）'));
+    toastr.success(on ? '条目已启用' : '条目已禁用');
 }
 
 // ───── 面板 ─────
@@ -443,6 +504,9 @@ function ensureShell() {
     <div class="rs_bar">
       <div class="rs_bar_title">参考</div>
       <div class="rs_icon rs_diff fa-solid fa-highlighter" title="标出正文里没有的句子"></div>
+      <div class="rs_icon rs_use fa-solid fa-file-import" title="整篇换成这一版"></div>
+      <div class="rs_icon rs_ver_del fa-solid fa-trash-can" title="删除这个版本"></div>
+      <div class="rs_icon rs_use fa-solid fa-file-import" title="整篇放进正文"></div>
       <select class="rs_ref text_pole"></select>
     </div>
     <div class="rs_ref_pane"></div>
@@ -451,6 +515,7 @@ function ensureShell() {
       <div class="rs_bar_title">正文</div>
       <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
       <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
+      <div class="rs_icon rs_ver_add fa-solid fa-bookmark" title="存为版本"></div>
       <div class="menu_button rs_save">保存</div>
     </div>
     <textarea class="rs_body_text" spellcheck="false"></textarea>
@@ -470,6 +535,8 @@ function showTarget(t) {
     $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(t.ref));
     $('#rs_panel .rs_save').text(t.saveLabel);
     $('#rs_panel .rs_diff').toggleClass('rs_on', state.diff);
+    $('#rs_panel .rs_ver_add').toggle(!!t.key && !t.empty);
+    updateRefButtons();
 
     const ta = bodyEl();
     ta.value = t.initial;
@@ -483,9 +550,73 @@ function showTarget(t) {
 }
 
 async function switchTarget(loader) {
-    if (isDirty() && !confirm('正文改了还没保存，切换会丢掉改动，继续吗？')) return false;
+    if (isDirty() && !(await askConfirm('正文改了还没保存，切换会丢掉改动，继续吗？'))) return false;
     showTarget(await loader());
     return true;
+}
+
+function updateRefButtons() {
+    const r = state.target?.refs[state.ref];
+    $('#rs_panel .rs_ver_del').toggle(!!r?.verId);
+}
+
+async function refreshRefs(selectVerId) {
+    const t = state.target;
+    t.refs = await buildRefs(t.key, t.initial);
+    let idx = selectVerId ? t.refs.findIndex(r => r.verId === selectVerId) : Math.min(state.ref, t.refs.length - 1);
+    if (idx < 0) idx = 0;
+    state.ref = idx;
+    state.used = new Set();
+    $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(idx));
+    updateRefButtons();
+    renderRef();
+}
+
+async function saveAsVersion() {
+    const t = state.target;
+    if (!t?.key) return;
+    const text = String(bodyEl().value);
+    if (!text.trim()) {
+        toastr.warning('正文是空的');
+        return;
+    }
+    const name = await askInput('给这个版本起个名字', '');
+    if (name === null) return;
+    const arr = await getVers(t.key);
+    const id = Date.now().toString(36);
+    arr.push({ id, name: name.trim() || fmtTime(Date.now()), time: Date.now(), text });
+    await putVers(t.key, arr);
+    await refreshRefs(id);
+    toastr.success('已存为版本，在参考下拉框里能找到');
+}
+
+async function deleteVersion() {
+    const t = state.target;
+    const r = t?.refs[state.ref];
+    if (!r?.verId) return;
+    if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？`))) return;
+    await putVers(t.key, (await getVers(t.key)).filter(v => v.id !== r.verId));
+    state.ref = 0;
+    await refreshRefs();
+    toastr.success('版本已删除');
+}
+
+function useRefWhole() {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const text = state.target?.refs[state.ref]?.text ?? '';
+    if (ta.value === text) {
+        toastr.info('正文已经是这一版了');
+        return;
+    }
+    state.typing = false;
+    pushUndo();
+    ta.value = text;
+    state.caret = null;
+    state.last = snap();
+    updateUndoButtons();
+    if (state.diff) renderRef();
+    toastr.info('已放进正文，点保存才会生效');
 }
 
 function renderRef() {
@@ -555,6 +686,26 @@ function insertSentence(text, key) {
     ta.classList.add('rs_flash');
 }
 
+// 把下面的正文整篇换成参考区这一版（可以撤销）
+function useRefVersion() {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const text = state.target.refs[state.ref]?.text ?? '';
+    if (text === ta.value) {
+        toastr.info('正文已经是这一版了');
+        return;
+    }
+    state.typing = false;
+    pushUndo();
+    ta.value = text;
+    state.caret = null;
+    state.last = snap();
+    renderRef();
+    updateUndoButtons();
+    ta.scrollTop = 0;
+    toastr.info('已换成这一版，点保存才会生效');
+}
+
 function onBodyInput() {
     const ta = bodyEl();
     if (!state.typing) pushUndo();
@@ -604,8 +755,8 @@ function onGripUp() {
     ctx().saveSettingsDebounced();
 }
 
-function closePanel(force = false) {
-    if (!force && isDirty() && !confirm('正文改了还没保存，确定关闭吗？')) return;
+async function closePanel(force = false) {
+    if (!force && isDirty() && !(await askConfirm('正文改了还没保存，确定关闭吗？'))) return;
     clearTimeout(state.typingTimer);
     clearTimeout(state.diffTimer);
     state.target = null;
@@ -699,6 +850,7 @@ function bindPanelEvents() {
         .on('change', '#rs_panel .rs_ref', function () {
             state.ref = Number(this.value);
             state.used = new Set();
+            updateRefButtons();
             renderRef();
             $('#rs_panel .rs_ref_pane').scrollTop(0);
         })
@@ -712,6 +864,11 @@ function bindPanelEvents() {
             if (pick === 'entry') ok = await switchTarget(() => worldTarget(state.target.book, val));
             if (!ok && prev !== undefined) $(this).val(prev);
         })
+        .on('click', '#rs_panel .rs_wi_toggle', toggleWorldEntry)
+        .on('click', '#rs_panel .rs_use', useRefVersion)
+        .on('click', '#rs_panel .rs_ver_add', saveAsVersion)
+        .on('click', '#rs_panel .rs_ver_del', deleteVersion)
+        .on('click', '#rs_panel .rs_use', useRefWhole)
         .on('click', '#rs_panel .rs_diff', function () {
             state.diff = !state.diff;
             $(this).toggleClass('rs_on', state.diff);
@@ -754,10 +911,12 @@ function lastAiIndex() {
 }
 
 function clampBall(x, y) {
-    const size = settings().ballSize;
+    const el = document.getElementById('rs_ball');
+    const w = el?.offsetWidth || settings().ballSize;
+    const h = el?.offsetHeight || settings().ballSize;
     return {
-        x: Math.min(Math.max(0, x), window.innerWidth - size),
-        y: Math.min(Math.max(0, y), window.innerHeight - size),
+        x: Math.min(Math.max(0, x), window.innerWidth - w),
+        y: Math.min(Math.max(0, y), window.innerHeight - h),
     };
 }
 
@@ -774,8 +933,15 @@ function renderBall() {
 
     const $b = $('<div id="rs_ball" title="编辑"></div>').appendTo('body');
     $b.css({ width: s.ballSize + 'px', height: s.ballSize + 'px', fontSize: Math.round(s.ballSize * 0.4) + 'px' });
-    if (s.ballImage) {
+    if (s.ballImage && s.ballShape === 'circle') {
         $b.addClass('rs_ball_img').css('background-image', `url("${String(s.ballImage).replace(/"/g, '%22')}")`);
+    } else if (s.ballImage) {
+        // 原形状：不裁剪、不加底色和边框，透明的地方就是透明
+        $b.addClass('rs_ball_raw').css({ width: 'auto', height: 'auto' });
+        $('<img>', { src: s.ballImage, draggable: false, alt: '' })
+            .css({ maxWidth: s.ballSize + 'px', maxHeight: s.ballSize + 'px' })
+            .on('load', () => placeBall($b[0].offsetLeft, $b[0].offsetTop))
+            .appendTo($b);
     } else {
         $b.addClass('fa-solid fa-pen-nib');
     }
@@ -815,7 +981,7 @@ function renderBall() {
     el.addEventListener('pointercancel', () => { drag = null; });
 }
 
-// 把上传的图片裁成正方形并压缩，存进设置里
+// 把上传的图片按比例压缩，保留透明背景，存进设置里
 function imageToDataUrl(file) {
     return new Promise((res, rej) => {
         const reader = new FileReader();
@@ -824,12 +990,12 @@ function imageToDataUrl(file) {
             const img = new Image();
             img.onerror = () => rej(new Error('图片读取失败'));
             img.onload = () => {
-                const size = Math.max(64, parseInt(settings().ballImageSize) || DEFAULTS.ballImageSize);
-                const side = Math.min(img.width, img.height);
+                const max = Math.max(64, parseInt(settings().ballImageSize) || DEFAULTS.ballImageSize);
+                const scale = Math.min(1, max / Math.max(img.width, img.height));
                 const canvas = document.createElement('canvas');
-                canvas.width = size;
-                canvas.height = size;
-                canvas.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+                canvas.width = Math.round(img.width * scale);
+                canvas.height = Math.round(img.height * scale);
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
                 res(canvas.toDataURL('image/png'));
             };
             img.src = reader.result;
@@ -853,7 +1019,7 @@ function renderSettings() {
       <label class="checkbox_label"><input type="checkbox" id="rs_enabled"> 重新生成时保留旧版本</label>
       <label>每条消息最多保留版本数<input type="number" id="rs_max" class="text_pole" min="2"></label>
       <label class="checkbox_label"><input type="checkbox" id="rs_ball_on"> 显示悬浮球</label>
-      <label>悬浮球大小（像素）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="80"></label>
+      <label>悬浮球大小（像素，原图形状时是最长边）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="80"></label>
       <div>悬浮球图片</div>
       <div class="rs_ball_img_row">
         <div class="menu_button" id="rs_ball_upload">上传图片</div>
@@ -861,6 +1027,12 @@ function renderSettings() {
         <input type="file" accept="image/*" id="rs_ball_file" hidden>
       </div>
       <input type="text" id="rs_ball_url" class="text_pole" placeholder="或者粘贴图片链接">
+      <label>图片形状
+        <select id="rs_ball_shape" class="text_pole">
+          <option value="original">原图形状</option>
+          <option value="circle">圆形</option>
+        </select>
+      </label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
     </div>
   </div>
@@ -891,6 +1063,11 @@ function renderSettings() {
     };
     $('#rs_ball_url').val(String(s.ballImage).startsWith('data:') ? '' : s.ballImage).on('change', function () {
         setBallImage(this.value.trim());
+    });
+    $('#rs_ball_shape').val(s.ballShape).on('change', function () {
+        settings().ballShape = this.value;
+        ctx().saveSettingsDebounced();
+        renderBall();
     });
     $('#rs_ball_upload').on('click', () => $('#rs_ball_file').trigger('click'));
     $('#rs_ball_file').on('change', async function () {

@@ -74,9 +74,9 @@
     margin: 0;
     padding: 6px 18px;
     border-radius: 10px;
-    color: var(--SmartThemeBlurTintColor);
-    background: var(--rs-accent);
-    border-color: var(--rs-accent);
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);           /* 按钮文字跟正文同色，任何主题都看得见 */
+    border: 1.5px solid var(--SmartThemeQuoteColor);
 }
 
 /* ───── 上半屏：参考版本 ───── */
@@ -194,6 +194,28 @@
     opacity: 0.5;
 }
 
+/* 世界书条目开关 */
+#rs_panel .rs_wi_toggle {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    opacity: 0.55;
+}
+
+#rs_panel .rs_wi_toggle i {
+    font-size: 22px;            /* 开关大小 */
+}
+
+#rs_panel .rs_wi_toggle.rs_on {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
 /* ───── 悬浮球菜单 ───── */
 #rs_menu {
     position: fixed;
@@ -268,4 +290,22 @@
 .rs_ball_img_row .menu_button {
     flex: 1;
     margin: 0;
+}
+
+/* 原图形状的悬浮球 */
+#rs_ball.rs_ball_raw {
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    opacity: 1;                 /* 原图形状时的透明度 */
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)); /* 沿着图片轮廓的阴影，不要可以删掉这行 */
+}
+
+#rs_ball.rs_ball_raw img {
+    display: block;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
 }
