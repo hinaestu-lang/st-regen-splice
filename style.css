@@ -1,0 +1,136 @@
+/* 用户消息不显示剪刀按钮 */
+.mes[is_user="true"] .regen_splice_btn {
+    display: none;
+}
+
+#rs_overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5); /* 遮罩深浅 */
+}
+
+#rs_panel {
+    width: min(720px, 96vw);   /* 面板宽度 */
+    max-height: 90dvh;         /* 面板最大高度 */
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 10px;       /* 面板圆角 */
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    color: var(--SmartThemeBodyColor);
+}
+
+#rs_panel .rs_head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: bold;
+}
+
+#rs_panel .rs_close {
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 1.2em;
+}
+
+#rs_panel .rs_tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+#rs_panel .rs_tab {
+    margin: 0;
+    padding: 3px 10px;
+}
+
+#rs_panel .rs_tab.rs_active {
+    border-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeQuoteColor);
+}
+
+#rs_panel .rs_source {
+    min-height: 160px; /* 原文框高度 */
+    resize: vertical;
+}
+
+#rs_panel .rs_result {
+    min-height: 140px; /* 结果框高度 */
+    resize: vertical;
+}
+
+#rs_panel .rs_row {
+    display: flex;
+    gap: 6px;
+}
+
+#rs_panel .rs_row .menu_button {
+    flex: 1;
+    margin: 0;
+}
+
+#rs_panel .rs_label {
+    font-size: 0.9em;
+    opacity: 0.7;
+    margin-top: 4px;
+}
+
+#rs_panel .rs_empty {
+    font-size: 0.9em;
+    opacity: 0.5;
+    padding: 6px 0;
+}
+
+#rs_panel .rs_frags {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#rs_panel .rs_frag {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+}
+
+#rs_panel .rs_frag_src {
+    font-size: 0.8em;
+    color: var(--SmartThemeQuoteColor);
+    white-space: nowrap;
+}
+
+#rs_panel .rs_frag_text {
+    font-size: 0.9em;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2; /* 片段预览显示行数 */
+    -webkit-box-orient: vertical;
+    white-space: pre-wrap;
+}
+
+#rs_panel .rs_frag_ops {
+    display: flex;
+    gap: 10px;
+}
+
+#rs_panel .rs_frag_ops > div {
+    cursor: pointer;
+    opacity: 0.7;
+    padding: 4px;
+}
+
+#rs_panel .rs_frag_ops > div:hover {
+    opacity: 1;
+}
