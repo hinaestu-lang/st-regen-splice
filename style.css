@@ -6,7 +6,10 @@
 /* ───── 面板外框：手机上从底部弹出 ───── */
 #rs_overlay {
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 100%;               /* 键盘弹出时会被脚本改成可见区域的高度 */
     z-index: 9999;
     display: flex;
     align-items: flex-end;
@@ -18,9 +21,10 @@
     --rs-line: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
     --rs-soft: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
     --rs-accent: var(--SmartThemeQuoteColor);
+    --rs-cliche: rgba(255, 170, 0, 0.35);  /* 八股词的底色 */
 
     width: min(720px, 100vw);   /* 面板宽度 */
-    height: 94dvh;              /* 面板高度 */
+    height: min(94dvh, 100%);   /* 面板高度 */
     display: flex;
     flex-direction: column;
     border-radius: 18px 18px 0 0;
@@ -30,12 +34,33 @@
     overflow: hidden;
 }
 
+/* 键盘开着：面板占满键盘上方的区域 */
+#rs_overlay.rs_kb #rs_panel {
+    height: 100%;
+    border-radius: 0;
+}
+
+#rs_overlay.rs_kb #rs_panel .rs_body_back,
+#rs_overlay.rs_kb #rs_panel .rs_body_text {
+    padding-bottom: 12px !important;    /* 键盘上方不需要再留底部安全区 */
+}
+
 @media (min-width: 760px) {
     #rs_overlay { align-items: center; }
     #rs_panel { height: 88dvh; border-radius: 18px; }
 }
 
-/* ───── 两个标题栏 ───── */
+/* 主题会给输入框、下拉框加底色，这里统一盖掉 */
+#rs_panel select {
+    margin: 0;
+    background-color: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    border: 1px solid var(--rs-line) !important;
+    border-radius: 10px !important;
+    box-shadow: none !important;
+}
+
+/* ───── 标题栏 ───── */
 #rs_panel .rs_bar {
     flex: none;
     display: flex;
@@ -51,10 +76,31 @@
     font-weight: 600;
 }
 
+#rs_panel .rs_top {
+    gap: 10px;
+}
+
+#rs_panel .rs_kind {
+    flex: none;
+    width: auto;
+    max-width: 45%;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+#rs_panel .rs_title {
+    min-width: 0;
+    font-size: 14px;
+    font-weight: normal;
+    opacity: 0.6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 #rs_panel .rs_ref {
     width: auto;
     max-width: 52%;
-    margin: 0;
     font-size: 14px;
 }
 
@@ -70,16 +116,86 @@
     pointer-events: none;
 }
 
+#rs_panel .rs_icon.rs_diff.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
 #rs_panel .rs_save {
     margin: 0;
     padding: 6px 18px;
     border-radius: 10px;
     font-weight: 600;
-    color: var(--SmartThemeBodyColor);           /* 按钮文字跟正文同色，任何主题都看得见 */
-    border: 1.5px solid var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBodyColor);
+    background: transparent !important;
+    border: 1.5px solid var(--rs-accent);
+    box-shadow: none !important;
 }
 
-/* ───── 上半屏：参考版本 ───── */
+/* 保存中：按钮变淡、不能连点 */
+#rs_panel .rs_save.rs_off {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* 正文栏的「八股 N」 */
+#rs_panel .rs_cliche {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--rs-line);
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0.5;
+}
+
+#rs_panel .rs_cliche.rs_on {
+    opacity: 0.9;
+}
+
+#rs_panel .rs_cliche.rs_hit {
+    opacity: 1;
+    border-color: rgba(255, 170, 0, 0.8);
+}
+
+/* ───── 编辑对象选择（角色字段 / 世界书和条目） ───── */
+#rs_panel .rs_pickers {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_pickers select {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+}
+
+#rs_panel .rs_wi_toggle {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+#rs_panel .rs_wi_toggle i {
+    font-size: 22px;            /* 开关大小 */
+}
+
+#rs_panel .rs_wi_toggle.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+/* ───── 上半屏：参考 ───── */
 #rs_panel .rs_ref_pane {
     flex: none;
     overflow-y: auto;
@@ -91,6 +207,13 @@
 
 #rs_panel .rs_ref_pane p {
     margin: 0 0 12px;
+}
+
+#rs_panel .rs_empty {
+    padding: 24px 6px;
+    font-size: 14px;
+    line-height: 1.8;
+    opacity: 0.5;
 }
 
 #rs_panel .rs_s {
@@ -107,6 +230,13 @@
 #rs_panel .rs_s.rs_used {
     color: var(--rs-accent);
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+}
+
+/* 标出改动时：正文里已经没有的句子 */
+#rs_panel .rs_s.rs_gone {
+    text-decoration: line-through;
+    text-decoration-color: var(--rs-accent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);
 }
 
 /* ───── 中间拖动条 ───── */
@@ -127,130 +257,81 @@
     width: 44px;
     height: 4px;
     border-radius: 2px;
-    background: var(--rs-line);
-    box-shadow: 0 0 0 0.5px var(--SmartThemeBodyColor);
-    opacity: 0.6;
+    background: var(--SmartThemeBodyColor);
+    opacity: 0.3;
 }
 
-/* ───── 下半屏：正文 ───── */
-#rs_panel .rs_body_text {
+/* ───── 下半屏：正文（输入框 + 底下一层画八股词高亮） ───── */
+#rs_panel .rs_body_wrap {
     flex: 1;
     min-height: 0;
-    width: 100%;
-    margin: 0;
-    padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
-    border: none;
-    border-radius: 0;
-    outline: none;
-    resize: none;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: 15px;            /* 正文字号 */
-    line-height: 1.95;          /* 正文行距 */
+    position: relative;
 }
 
+/* 两层的排版必须完全一样，高亮才对得上 */
+#rs_panel .rs_body_back,
+#rs_panel .rs_body_text {
+    position: absolute !important;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 12px 18px calc(16px + env(safe-area-inset-bottom)) !important;
+    box-sizing: border-box !important;
+    border: none !important;
+    border-radius: 0 !important;
+    font-family: inherit !important;
+    font-size: 15px !important;           /* 正文字号 */
+    line-height: 1.95 !important;         /* 正文行距 */
+    letter-spacing: normal !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
+    overflow-y: auto !important;
+    scrollbar-gutter: stable;
+}
+
+#rs_panel .rs_body_back {
+    z-index: 0;
+    color: transparent;
+    overflow-y: hidden !important;
+    pointer-events: none;
+}
+
+#rs_panel .rs_body_text {
+    z-index: 1;
+    resize: none;
+    outline: none;
+    background: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+    filter: none !important;
+}
+
+#rs_panel .rs_body_back .rs_mark {
+    color: transparent;
+    background: var(--rs-cliche);
+    border-radius: 3px;
+}
+
+#rs_panel .rs_ref_pane .rs_mark {
+    color: inherit;
+    background: var(--rs-cliche);
+    border-radius: 3px;
+}
+
+/* 插入句子后闪一下 */
 @keyframes rs_flash {
     from { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 10%, transparent); }
     to { background: transparent; }
 }
 
-#rs_panel .rs_body_text.rs_flash {
-    animation: rs_flash 0.5s ease-out; /* 插入后闪一下的时长 */
+#rs_panel .rs_body_wrap.rs_flash {
+    animation: rs_flash 0.5s ease-out; /* 闪烁时长 */
 }
 
-/* ───── 编辑对象选择（角色字段 / 世界书和条目） ───── */
-#rs_panel .rs_pickers {
-    flex: none;
-    display: flex;
-    gap: 8px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--rs-line);
-}
-
-#rs_panel .rs_pickers select {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    font-size: 14px;
-}
-
-#rs_panel .rs_icon.rs_diff.rs_on {
-    opacity: 1;
-    color: var(--rs-accent);
-}
-
-/* 标出改动时：正文里已经没有的句子 */
-#rs_panel .rs_s.rs_gone {
-    text-decoration: line-through;
-    text-decoration-color: var(--rs-accent);
-    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);
-}
-
-#rs_panel .rs_empty {
-    padding: 24px 6px;
-    font-size: 14px;
-    line-height: 1.8;
-    opacity: 0.5;
-}
-
-/* 世界书条目开关 */
-#rs_panel .rs_wi_toggle {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 4px;
-    font-size: 13px;
-    cursor: pointer;
-    white-space: nowrap;
-    opacity: 0.55;
-}
-
-#rs_panel .rs_wi_toggle i {
-    font-size: 22px;            /* 开关大小 */
-}
-
-#rs_panel .rs_wi_toggle.rs_on {
-    opacity: 1;
-    color: var(--SmartThemeQuoteColor);
-}
-
-/* ───── 悬浮球菜单 ───── */
-#rs_menu {
-    position: fixed;
-    z-index: 9999;
-    min-width: 132px;
-    padding: 6px;
-    border-radius: 14px;
-    border: 1px solid var(--SmartThemeBorderColor);
-    background: var(--SmartThemeBlurTintColor);
-    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
-    color: var(--SmartThemeBodyColor);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-}
-
-#rs_menu .rs_menu_item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    font-size: 15px;
-    cursor: pointer;
-}
-
-#rs_menu .rs_menu_item i {
-    width: 18px;
-    text-align: center;
-    color: var(--SmartThemeQuoteColor);
-}
-
-#rs_menu .rs_menu_item:active {
-    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
-}
-
-/* 悬浮球 */
+/* ───── 悬浮球 ───── */
 #rs_ball {
     position: fixed;
     z-index: 9998;
@@ -259,10 +340,10 @@
     justify-content: center;
     border-radius: 50%;
     cursor: pointer;
-    touch-action: none;  /* 拖动时不触发页面滚动 */
+    touch-action: none;         /* 拖动时不触发页面滚动 */
     user-select: none;
     -webkit-user-select: none;
-    opacity: 0.85;       /* 悬浮球透明度 */
+    opacity: 0.85;              /* 默认图标悬浮球的透明度 */
     border: 1px solid var(--SmartThemeBorderColor);
     background: var(--SmartThemeBlurTintColor);
     backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
@@ -274,32 +355,25 @@
     opacity: 1;
 }
 
-/* 自定义图片的悬浮球 */
+/* 自定义图片：正方形 / 原图形状，都不加边框和底色 */
+#rs_ball.rs_ball_img,
+#rs_ball.rs_ball_raw {
+    border: none;
+    border-radius: 0;           /* 想要一点圆角可以改成 8px 之类 */
+    background-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    opacity: 1;
+}
+
 #rs_ball.rs_ball_img {
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
 }
 
-.rs_ball_img_row {
-    display: flex;
-    gap: 6px;
-    margin: 4px 0;
-}
-
-.rs_ball_img_row .menu_button {
-    flex: 1;
-    margin: 0;
-}
-
-/* 原图形状的悬浮球 */
 #rs_ball.rs_ball_raw {
-    border: none;
-    border-radius: 0;
     background: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    opacity: 1;                 /* 原图形状时的透明度 */
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)); /* 沿着图片轮廓的阴影，不要可以删掉这行 */
 }
 
@@ -310,41 +384,14 @@
     -webkit-user-drag: none;
 }
 
-/* 盖住主题自带的输入框底色，避免正文发灰看不清 */
-#rs_panel .rs_body_text {
-    background: transparent !important;
-    color: var(--SmartThemeBodyColor) !important;
-    border: none !important;
-    box-shadow: none !important;
-    opacity: 1 !important;
-    filter: none !important;
+/* ───── 扩展设置里的按钮行 ───── */
+.rs_ball_img_row {
+    display: flex;
+    gap: 6px;
+    margin: 4px 0;
 }
 
-#rs_panel select {
-    background-color: transparent !important;
-    color: var(--SmartThemeBodyColor) !important;
-    border: 1px solid var(--rs-line) !important;
-    border-radius: 10px !important;
-    box-shadow: none !important;
-}
-
-#rs_panel .rs_save {
-    background: transparent !important;
-    box-shadow: none !important;
-}
-
-/* 保存中：按钮变淡、不能连点 */
-#rs_panel .rs_save.rs_off {
-    opacity: 0.4;
-    pointer-events: none;
-}
-
-/* 正方形图片悬浮球：不裁圆、不加边框和底色 */
-#rs_ball.rs_ball_img {
-    border: none;
-    border-radius: 0;           /* 想要一点圆角可以改成 8px 之类 */
-    background-color: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
-    opacity: 1;
+.rs_ball_img_row .menu_button {
+    flex: 1;
+    margin: 0;
 }

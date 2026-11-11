@@ -1,6 +1,6 @@
 // 重生成拼接 v0.3.0
 // 1. 点「重新生成」时，把被删掉的旧回复塞回新回复的 swipes 里，左右翻就能看到
-// 2. 悬浮球菜单：本楼拼接、角色卡、用户人设、世界书，都在同一个上下分屏面板里改
+// 2. 点悬浮球直接打开面板，左上角切换编辑楼层、角色卡、用户人设、世界书
 // 3. 角色卡 / 人设 / 世界书：可存多个命名版本随时切换；保存时自动留存改前改后，可在参考区对比
 
 const MODULE = 'regenSplice';
@@ -16,14 +16,27 @@ const DEFAULTS = {
     ballShape: 'square', // 有图片时的形状：square = 裁成正方形，original = 图片原形状
     splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
+    lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
+    clicheOn: true,    // 楼层编辑时是否标出八股词
+    // 八股词表：一行一个；用 /.../ 包起来的是正则，可以匹配变体
+    clicheWords: [
+        '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
+        '投石', '/投入.{0,8}(石子|石头)/', '/石子.{0,8}(湖|水)面/',
+        '扎针', '/针.{0,4}扎|扎.{0,4}针|像.{0,6}针/',
+    ].join('\n'),
 };
 
 const ctx = () => SillyTavern.getContext();
 
+// 始终返回同一个对象，只补上缺的默认值（每次新建对象会导致设置写丢）
 function settings() {
     const es = ctx().extensionSettings;
-    es[MODULE] = Object.assign({}, DEFAULTS, es[MODULE] || {});
-    return es[MODULE];
+    if (!es[MODULE] || typeof es[MODULE] !== 'object') es[MODULE] = {};
+    const s = es[MODULE];
+    for (const k of Object.keys(DEFAULTS)) {
+        if (!(k in s)) s[k] = DEFAULTS[k];
+    }
+    return s;
 }
 
 // ───────────── 重新生成保留 ─────────────
@@ -258,7 +271,7 @@ function msgTarget(id) {
     if (versions.length === 1) ref = 0;
     return {
         kind: 'msg',
-        title: `第 ${id} 楼`,
+        subtitle: `第 ${id} 楼`,
         pickers: '',
         refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: t })),
         ref,
@@ -313,7 +326,7 @@ async function charTarget(field = 'description') {
 
     return {
         kind: 'char',
-        title: `角色卡：${escapeHtml(ch.name)}`,
+        subtitle: escapeHtml(ch.name),
         pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
         refs: await buildRefs(key, initial),
         key,
@@ -355,7 +368,7 @@ async function personaTarget() {
     const key = `persona:${c.name1}`;
     return {
         kind: 'persona',
-        title: `用户人设：${escapeHtml(c.name1)}`,
+        subtitle: escapeHtml(c.name1),
         pickers: '',
         refs: await buildRefs(key, initial),
         key,
@@ -398,7 +411,7 @@ async function worldTarget(book, uid) {
     const bookOpts = names.map(n => `<option ${n === book ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
     if (!entries.length) {
         return {
-            kind: 'world', title: '世界书',
+            kind: 'world',
             pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>`,
             refs: [{ label: '打开时', text: '' }], ref: 0, initial: '', empty: '这本世界书还没有条目',
             saveLabel: '保存', closeAfterSave: false, save: async () => false,
@@ -414,7 +427,6 @@ async function worldTarget(book, uid) {
 
     return {
         kind: 'world',
-        title: '世界书',
         pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
 <select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>
 ${wiToggleHtml(!entry.disable)}`,
@@ -468,6 +480,89 @@ async function toggleWorldEntry() {
     toastr.success(on ? '条目已启用' : '条目已禁用');
 }
 
+// ───── 八股词 ─────
+
+let clicheCache = { src: null, re: null };
+function clicheRegex() {
+    const src = String(settings().clicheWords || '');
+    if (clicheCache.src === src) return clicheCache.re;
+    const parts = [];
+    src.split(/\n/).map(x => x.trim()).filter(Boolean).forEach(w => {
+        const m = w.match(/^\/(.+)\/$/);
+        if (m) {
+            try {
+                new RegExp(m[1]);
+                parts.push(`(?:${m[1]})`);
+            } catch {
+                console.warn('[重生成拼接] 八股词正则写错了，已跳过：', w);
+            }
+        } else {
+            parts.push(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        }
+    });
+    clicheCache = { src, re: parts.length ? new RegExp(parts.join('|'), 'g') : null };
+    return clicheCache.re;
+}
+
+const clicheActive = () => state.target?.kind === 'msg' && settings().clicheOn && !!clicheRegex();
+
+// 把文字转成带 <mark> 的 HTML
+function markCliche(text) {
+    const re = clicheRegex();
+    if (!re) return { html: escapeHtml(text), count: 0 };
+    let html = '';
+    let last = 0;
+    let count = 0;
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+        if (!m[0]) {
+            re.lastIndex++;
+            continue;
+        }
+        html += escapeHtml(text.slice(last, m.index)) + `<mark class="rs_mark">${escapeHtml(m[0])}</mark>`;
+        last = m.index + m[0].length;
+        count++;
+    }
+    html += escapeHtml(text.slice(last));
+    return { html, count };
+}
+
+function renderBack() {
+    const ta = bodyEl();
+    const $back = $('#rs_panel .rs_body_back');
+    const $btn = $('#rs_panel .rs_cliche');
+    if (!ta || !$back.length) return;
+    if (state.target?.kind !== 'msg') {
+        $back.empty();
+        $btn.hide();
+        return;
+    }
+    $btn.show();
+    if (!clicheActive()) {
+        $back.empty();
+        $btn.text('八股 关').removeClass('rs_on rs_hit');
+        return;
+    }
+    const { html, count } = markCliche(ta.value);
+    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
+    $back.html(html + (ta.value.endsWith('\n') ? '\u200b' : ''));
+    $btn.text(`八股 ${count}`).addClass('rs_on').toggleClass('rs_hit', count > 0);
+    syncBackScroll();
+}
+
+function syncBackScroll() {
+    const ta = bodyEl();
+    const back = $('#rs_panel .rs_body_back')[0];
+    if (ta && back) back.scrollTop = ta.scrollTop;
+}
+
+let backRaf = 0;
+function scheduleBack() {
+    cancelAnimationFrame(backRaf);
+    backRaf = requestAnimationFrame(renderBack);
+}
+
 // ───── 面板 ─────
 
 const state = {
@@ -497,6 +592,12 @@ function ensureShell() {
 <div id="rs_overlay">
   <div id="rs_panel">
     <div class="rs_bar rs_top">
+      <select class="rs_kind text_pole">
+        <option value="msg">楼层</option>
+        <option value="char">角色卡</option>
+        <option value="persona">用户人设</option>
+        <option value="world">世界书</option>
+      </select>
       <div class="rs_bar_title rs_title"></div>
       <div class="rs_icon rs_close fa-solid fa-xmark" title="关闭"></div>
     </div>
@@ -512,16 +613,44 @@ function ensureShell() {
     <div class="rs_grip"><span></span></div>
     <div class="rs_bar">
       <div class="rs_bar_title">正文</div>
+      <div class="rs_cliche" title="点一下开关八股词高亮"></div>
       <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
       <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
       <div class="rs_icon rs_ver_add fa-solid fa-bookmark" title="存为版本"></div>
       <div class="menu_button rs_save">保存</div>
     </div>
-    <textarea class="rs_body_text" spellcheck="false"></textarea>
+    <div class="rs_body_wrap">
+      <div class="rs_body_back" aria-hidden="true"></div>
+      <textarea class="rs_body_text" spellcheck="false"></textarea>
+    </div>
   </div>
 </div>`);
+    bodyEl().addEventListener('scroll', syncBackScroll, { passive: true });
+    window.visualViewport?.addEventListener('resize', fitToViewport);
+    window.visualViewport?.addEventListener('scroll', fitToViewport);
+    fitToViewport();
+}
+
+// 键盘弹出时，把面板缩到键盘上方的可见区域里，而不是整个被顶上去
+const KEYBOARD_MIN = 120; // 可见高度比窗口少这么多像素，就当作键盘开着
+const KEYBOARD_REF_RATIO = 0.2; // 键盘开着时参考区最多占面板的比例，正文多留点地方
+
+function fitToViewport() {
+    const ov = document.getElementById('rs_overlay');
+    if (!ov) return;
+    const vv = window.visualViewport;
+    if (vv) {
+        ov.style.top = vv.offsetTop + 'px';
+        ov.style.height = vv.height + 'px';
+        ov.classList.toggle('rs_kb', window.innerHeight - vv.height > KEYBOARD_MIN);
+    }
+    applySplitRatio();
+}
+
+function applySplitRatio() {
     const ratio = Math.min(0.8, Math.max(0.15, Number(settings().splitRatio) || DEFAULTS.splitRatio));
-    $('#rs_panel .rs_ref_pane').css('height', Math.round($('#rs_panel').height() * ratio) + 'px');
+    const r = $('#rs_overlay').hasClass('rs_kb') ? Math.min(ratio, KEYBOARD_REF_RATIO) : ratio;
+    $('#rs_panel .rs_ref_pane').css('height', Math.round($('#rs_panel').height() * r) + 'px');
 }
 
 function showTarget(t) {
@@ -529,9 +658,14 @@ function showTarget(t) {
     ensureShell();
     Object.assign(state, { target: t, ref: t.ref, used: new Set(), caret: null, undo: [], redo: [], typing: false });
 
-    $('#rs_panel .rs_title').html(t.title);
+    $('#rs_panel .rs_title').html(t.subtitle || '');
+    $('#rs_panel .rs_kind').val(t.kind);
+    if (settings().lastKind !== t.kind) {
+        settings().lastKind = t.kind;
+        ctx().saveSettingsDebounced();
+    }
     $('#rs_panel .rs_pickers').html(t.pickers).toggle(!!t.pickers);
-    $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(t.ref));
+    fillRefSelect(t.ref);
     $('#rs_panel .rs_save').text(t.saveLabel);
     state.diff = t.kind !== 'msg';
     $('#rs_panel .rs_diff').toggle(t.kind !== 'msg').toggleClass('rs_on', state.diff);
@@ -547,6 +681,7 @@ function showTarget(t) {
     updateUndoButtons();
     $('#rs_panel .rs_ref_pane').scrollTop(0);
     ta.scrollTop = 0;
+    renderBack();
 }
 
 async function switchTarget(loader) {
@@ -555,6 +690,11 @@ async function switchTarget(loader) {
     if (!t) return false;
     showTarget(t);
     return true;
+}
+
+function fillRefSelect(idx) {
+    const html = state.target.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('');
+    $('#rs_panel .rs_ref').html(html).val(String(idx));
 }
 
 function updateRefButtons() {
@@ -569,7 +709,7 @@ async function refreshRefs(selectVerId) {
     if (idx < 0) idx = 0;
     state.ref = idx;
     state.used = new Set();
-    $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(idx));
+    fillRefSelect(idx);
     updateRefButtons();
     renderRef();
 }
@@ -618,6 +758,7 @@ function useRefWhole() {
     state.last = snap();
     updateUndoButtons();
     if (state.diff) renderRef();
+    renderBack();
     toastr.info('已放进正文，点保存才会生效');
 }
 
@@ -635,7 +776,8 @@ function renderRef() {
         const spans = splitSentences(line).map((s, si) => {
             const k = `${state.ref}-${li}-${si}`;
             const cls = state.used.has(k) ? 'rs_used' : (state.diff && !body.includes(s.trim()) ? 'rs_gone' : '');
-            return `<span class="rs_s ${cls}" data-k="${k}">${escapeHtml(s)}</span>`;
+            const inner = clicheActive() ? markCliche(s).html : escapeHtml(s);
+            return `<span class="rs_s ${cls}" data-k="${k}">${inner}</span>`;
         }).join('');
         return `<p>${spans}</p>`;
     }).join('');
@@ -655,6 +797,7 @@ function applySnap(sn) {
     try { ta.setSelectionRange(sn.s, sn.e); } catch { /* 忽略 */ }
     state.last = snap();
     if (state.diff) renderRef();
+    renderBack();
 }
 
 function updateUndoButtons() {
@@ -682,10 +825,12 @@ function insertSentence(text, key) {
     state.used.add(key);
     renderRef();
     updateUndoButtons();
+    renderBack();
 
-    ta.classList.remove('rs_flash');
-    void ta.offsetWidth;
-    ta.classList.add('rs_flash');
+    const wrap = ta.parentElement; // 输入框背景被强制透明，闪烁放在外层
+    wrap.classList.remove('rs_flash');
+    void wrap.offsetWidth;
+    wrap.classList.add('rs_flash');
 }
 
 function onBodyInput() {
@@ -697,6 +842,7 @@ function onBodyInput() {
     state.caret = { s: ta.selectionStart, e: ta.selectionEnd };
     state.last = snap();
     updateUndoButtons();
+    scheduleBack();
     if (state.diff) {
         clearTimeout(state.diffTimer);
         state.diffTimer = setTimeout(renderRef, 400);
@@ -742,6 +888,8 @@ async function closePanel(force = false) {
     clearTimeout(state.typingTimer);
     clearTimeout(state.diffTimer);
     state.target = null;
+    window.visualViewport?.removeEventListener('resize', fitToViewport);
+    window.visualViewport?.removeEventListener('scroll', fitToViewport);
     $('#rs_overlay').remove();
 }
 
@@ -793,41 +941,33 @@ function openPanel(id) {
     showTarget(msgTarget(id));
 }
 
-// ───── 悬浮球菜单 ─────
+// ───── 按类型打开 ─────
 
-function openMenu() {
-    if ($('#rs_menu').length) {
-        $('#rs_menu').remove();
-        return;
-    }
-    const ball = document.getElementById('rs_ball');
-    const r = ball.getBoundingClientRect();
-    const $m = $(`
-<div id="rs_menu">
-  <div class="rs_menu_item" data-go="msg"><i class="fa-solid fa-scissors"></i>本楼拼接</div>
-  <div class="rs_menu_item" data-go="char"><i class="fa-solid fa-id-card"></i>角色卡</div>
-  <div class="rs_menu_item" data-go="persona"><i class="fa-solid fa-user"></i>用户人设</div>
-  <div class="rs_menu_item" data-go="world"><i class="fa-solid fa-book-atlas"></i>世界书</div>
-</div>`).appendTo('body');
-    const w = $m.outerWidth();
-    const h = $m.outerHeight();
-    const left = r.left + r.width / 2 > window.innerWidth / 2 ? r.left - w - 8 : r.right + 8;
-    const top = Math.min(Math.max(8, r.top + r.height / 2 - h / 2), window.innerHeight - h - 8);
-    $m.css({ left: Math.max(8, left) + 'px', top: top + 'px' });
-}
-
-async function onMenuPick(go) {
-    $('#rs_menu').remove();
-    if (go === 'msg') {
+const LOADERS = {
+    msg: async () => {
         const id = lastAiIndex();
-        if (id < 0) return toastr.warning('当前聊天里还没有 AI 回复');
-        openPanel(id);
-    } else if (go === 'char') {
-        showTarget(await charTarget());
-    } else if (go === 'persona') {
-        showTarget(await personaTarget());
-    } else if (go === 'world') {
-        showTarget(await worldTarget());
+        if (id < 0) {
+            toastr.warning('当前聊天里还没有 AI 回复');
+            return null;
+        }
+        return msgTarget(id);
+    },
+    char: () => charTarget(),
+    persona: () => personaTarget(),
+    world: () => worldTarget(),
+};
+
+// 点悬浮球：打开上次用的那一类；打不开就依次试其他类
+async function openFromBall() {
+    if ($('#rs_overlay').length) return;
+    const first = settings().lastKind in LOADERS ? settings().lastKind : 'msg';
+    const order = [first, ...Object.keys(LOADERS).filter(k => k !== first)];
+    for (const k of order) {
+        const t = await LOADERS[k]();
+        if (t) {
+            showTarget(t);
+            return;
+        }
     }
 }
 
@@ -853,7 +993,7 @@ function bindPanelEvents() {
         .on('change', '#rs_panel .rs_pick', async function () {
             const pick = $(this).data('pick');
             const val = $(this).val();
-            const prev = this.dataset.prev ?? $(this).find('option[selected]').val();
+            const prev = $(this).find('option[selected]').val();
             let ok = true;
             if (pick === 'char') ok = await switchTarget(() => charTarget(val));
             if (pick === 'book') ok = await switchTarget(() => worldTarget(val));
@@ -882,9 +1022,17 @@ function bindPanelEvents() {
         .on('pointerdown', '#rs_panel .rs_grip', e => onGripDown(e.originalEvent))
         .on('pointermove', '#rs_panel .rs_grip', e => onGripMove(e.originalEvent))
         .on('pointerup pointercancel', '#rs_panel .rs_grip', onGripUp)
-        .on('click', '#rs_menu .rs_menu_item', function () { onMenuPick($(this).data('go')); })
-        .on('pointerdown', e => {
-            if ($('#rs_menu').length && !$(e.target).closest('#rs_menu, #rs_ball').length) $('#rs_menu').remove();
+        .on('change', '#rs_panel .rs_kind', async function () {
+            const prev = state.target?.kind;
+            const ok = await switchTarget(LOADERS[this.value]);
+            if (!ok && prev) $(this).val(prev);
+        })
+        .on('click', '#rs_panel .rs_cliche', function () {
+            settings().clicheOn = !settings().clicheOn;
+            $('#rs_cliche_on').prop('checked', settings().clicheOn);
+            ctx().saveSettingsDebounced();
+            renderBack();
+            renderRef();
         });
 
     document.addEventListener('selectionchange', () => {
@@ -926,7 +1074,7 @@ function renderBall() {
     const s = settings();
     if (!s.ball) return;
 
-    const $b = $('<div id="rs_ball" title="编辑"></div>').appendTo('body');
+    const $b = $('<div id="rs_ball" title="打开编辑面板"></div>').appendTo('body');
     $b.css({ width: s.ballSize + 'px', height: s.ballSize + 'px', fontSize: Math.round(s.ballSize * 0.4) + 'px' });
     if (s.ballImage && s.ballShape !== 'original') {
         $b.addClass('rs_ball_img').css('background-image', `url("${String(s.ballImage).replace(/"/g, '%22')}")`);
@@ -970,7 +1118,7 @@ function renderBall() {
             ctx().saveSettingsDebounced();
             return;
         }
-        openMenu();
+        openFromBall();
     });
 
     el.addEventListener('pointercancel', () => { drag = null; });
@@ -1028,6 +1176,10 @@ function renderSettings() {
           <option value="original">原图形状</option>
         </select>
       </label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
+      <label>八股词表（一行一个，用 /.../ 包起来是正则）
+        <textarea id="rs_cliche_words" class="text_pole" rows="6"></textarea>
+      </label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
     </div>
   </div>
@@ -1081,6 +1233,16 @@ function renderSettings() {
     $('#rs_ball_clear').on('click', () => {
         $('#rs_ball_url').val('');
         setBallImage('');
+    });
+    $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () {
+        settings().clicheOn = this.checked;
+        ctx().saveSettingsDebounced();
+        renderBack();
+    });
+    $('#rs_cliche_words').val(s.clicheWords).on('input', function () {
+        settings().clicheWords = this.value;
+        ctx().saveSettingsDebounced();
+        renderBack();
     });
     $('#rs_snap_keep').val(s.snapKeep).on('input', function () {
         settings().snapKeep = Math.max(2, parseInt(this.value) || DEFAULTS.snapKeep);
