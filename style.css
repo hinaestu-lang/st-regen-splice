@@ -309,3 +309,42 @@
     user-select: none;
     -webkit-user-drag: none;
 }
+
+/* 盖住主题自带的输入框底色，避免正文发灰看不清 */
+#rs_panel .rs_body_text {
+    background: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    border: none !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+    filter: none !important;
+}
+
+#rs_panel select {
+    background-color: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    border: 1px solid var(--rs-line) !important;
+    border-radius: 10px !important;
+    box-shadow: none !important;
+}
+
+#rs_panel .rs_save {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* 保存中：按钮变淡、不能连点 */
+#rs_panel .rs_save.rs_off {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* 正方形图片悬浮球：不裁圆、不加边框和底色 */
+#rs_ball.rs_ball_img {
+    border: none;
+    border-radius: 0;           /* 想要一点圆角可以改成 8px 之类 */
+    background-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    opacity: 1;
+}

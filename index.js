@@ -9,11 +9,11 @@ const DEFAULTS = {
     enabled: true,     // 是否在重新生成时保留旧版本
     maxKeep: 20,       // 每条消息最多保留的版本数，超出会删掉最旧的（最小 2）
     ball: true,        // 是否显示悬浮球
-    ballSize: 46,      // 悬浮球直径（像素）
+    ballSize: 46,      // 悬浮球大小（像素，正方形是边长，原图形状是最长边），可填 30–300
     ballPos: null,     // 悬浮球位置，拖动后自动记录，不用手动改
     ballImage: '',     // 悬浮球图片：上传后自动生成，也可以填图片链接；留空用默认图标
-    ballImageSize: 160, // 上传图片压缩后最长边（像素），越大越清晰、占的空间越多
-    ballShape: 'original', // 有图片时的形状：original = 图片原形状，circle = 裁成圆形
+    ballImageSize: 600, // 上传图片压缩后最长边（像素），越大越清晰、占的空间越多
+    ballShape: 'square', // 有图片时的形状：square = 裁成正方形，original = 图片原形状
     splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
 };
@@ -109,7 +109,7 @@ function onGenEnded() {
 function refreshSwipeUI(id, msg) {
     const $mes = $(`#chat .mes[mesid="${id}"]`);
     $mes.find('.swipes-counter').text(`${msg.swipe_id + 1}/${msg.swipes.length}`);
-    if (msg.swipes.length > 1) {
+    if (msg.swipes.length > 1 && id === ctx().chat.length - 1) {
         $mes.find('.swipe_left').css('display', 'flex');
         $mes.find('.swipe_right').css('display', 'flex');
     }
@@ -131,8 +131,8 @@ const CHAR_FIELDS = [
     ['scenario', '场景', '#scenario_pole', false],
     ['first_mes', '开场白', '#firstmessage_textarea', false],
     ['mes_example', '对话示例', '#mes_example_textarea', false],
-    ['system_prompt', '系统提示词', null, true],
-    ['post_history_instructions', '后置指令', null, true],
+    ['system_prompt', '系统提示词', '#system_prompt_textarea', true],
+    ['post_history_instructions', '后置指令', '#post_history_instructions_textarea', true],
 ];
 
 function injectButtons() {
@@ -506,7 +506,6 @@ function ensureShell() {
       <div class="rs_icon rs_diff fa-solid fa-highlighter" title="标出正文里没有的句子"></div>
       <div class="rs_icon rs_use fa-solid fa-file-import" title="整篇换成这一版"></div>
       <div class="rs_icon rs_ver_del fa-solid fa-trash-can" title="删除这个版本"></div>
-      <div class="rs_icon rs_use fa-solid fa-file-import" title="整篇放进正文"></div>
       <select class="rs_ref text_pole"></select>
     </div>
     <div class="rs_ref_pane"></div>
@@ -534,7 +533,8 @@ function showTarget(t) {
     $('#rs_panel .rs_pickers').html(t.pickers).toggle(!!t.pickers);
     $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(t.ref));
     $('#rs_panel .rs_save').text(t.saveLabel);
-    $('#rs_panel .rs_diff').toggleClass('rs_on', state.diff);
+    state.diff = t.kind !== 'msg';
+    $('#rs_panel .rs_diff').toggle(t.kind !== 'msg').toggleClass('rs_on', state.diff);
     $('#rs_panel .rs_ver_add').toggle(!!t.key && !t.empty);
     updateRefButtons();
 
@@ -551,7 +551,9 @@ function showTarget(t) {
 
 async function switchTarget(loader) {
     if (isDirty() && !(await askConfirm('正文改了还没保存，切换会丢掉改动，继续吗？'))) return false;
-    showTarget(await loader());
+    const t = await loader();
+    if (!t) return false;
+    showTarget(t);
     return true;
 }
 
@@ -574,7 +576,7 @@ async function refreshRefs(selectVerId) {
 
 async function saveAsVersion() {
     const t = state.target;
-    if (!t?.key) return;
+    if (!t?.key || saving) return;
     const text = String(bodyEl().value);
     if (!text.trim()) {
         toastr.warning('正文是空的');
@@ -686,26 +688,6 @@ function insertSentence(text, key) {
     ta.classList.add('rs_flash');
 }
 
-// 把下面的正文整篇换成参考区这一版（可以撤销）
-function useRefVersion() {
-    const ta = bodyEl();
-    if (ta.readOnly) return;
-    const text = state.target.refs[state.ref]?.text ?? '';
-    if (text === ta.value) {
-        toastr.info('正文已经是这一版了');
-        return;
-    }
-    state.typing = false;
-    pushUndo();
-    ta.value = text;
-    state.caret = null;
-    state.last = snap();
-    renderRef();
-    updateUndoButtons();
-    ta.scrollTop = 0;
-    toastr.info('已换成这一版，点保存才会生效');
-}
-
 function onBodyInput() {
     const ta = bodyEl();
     if (!state.typing) pushUndo();
@@ -763,8 +745,10 @@ async function closePanel(force = false) {
     $('#rs_overlay').remove();
 }
 
+let saving = false;
 async function onSave() {
     const t = state.target;
+    if (!t || saving) return;
     const text = String(bodyEl().value);
     if (t.empty) return;
     if (text === t.initial) {
@@ -775,9 +759,18 @@ async function onSave() {
         toastr.warning('正文是空的');
         return;
     }
+    saving = true;
     const $btn = $('#rs_panel .rs_save').addClass('rs_off');
-    const ok = await t.save(text);
-    $btn.removeClass('rs_off');
+    let ok = false;
+    try {
+        ok = await t.save(text);
+    } catch (e) {
+        console.error('[重生成拼接] 保存失败', e);
+        toastr.error('保存失败，内容还在面板里，可以再试一次');
+    } finally {
+        saving = false;
+        $btn.removeClass('rs_off');
+    }
     if (!ok) return;
     if (t.closeAfterSave) {
         closePanel(true);
@@ -843,8 +836,11 @@ function bindPanelEvents() {
         .on('click', '.regen_splice_btn', function () {
             openPanel(Number($(this).closest('.mes').attr('mesid')));
         })
+        .on('pointerdown', '#rs_overlay', function (e) {
+            this.dataset.downOnSelf = e.target === this ? '1' : '';
+        })
         .on('click', '#rs_overlay', function (e) {
-            if (e.target === this) closePanel();
+            if (e.target === this && this.dataset.downOnSelf === '1') closePanel();
         })
         .on('click', '#rs_panel .rs_close', () => closePanel())
         .on('change', '#rs_panel .rs_ref', function () {
@@ -865,7 +861,6 @@ function bindPanelEvents() {
             if (!ok && prev !== undefined) $(this).val(prev);
         })
         .on('click', '#rs_panel .rs_wi_toggle', toggleWorldEntry)
-        .on('click', '#rs_panel .rs_use', useRefVersion)
         .on('click', '#rs_panel .rs_ver_add', saveAsVersion)
         .on('click', '#rs_panel .rs_ver_del', deleteVersion)
         .on('click', '#rs_panel .rs_use', useRefWhole)
@@ -933,7 +928,7 @@ function renderBall() {
 
     const $b = $('<div id="rs_ball" title="编辑"></div>').appendTo('body');
     $b.css({ width: s.ballSize + 'px', height: s.ballSize + 'px', fontSize: Math.round(s.ballSize * 0.4) + 'px' });
-    if (s.ballImage && s.ballShape === 'circle') {
+    if (s.ballImage && s.ballShape !== 'original') {
         $b.addClass('rs_ball_img').css('background-image', `url("${String(s.ballImage).replace(/"/g, '%22')}")`);
     } else if (s.ballImage) {
         // 原形状：不裁剪、不加底色和边框，透明的地方就是透明
@@ -1019,7 +1014,7 @@ function renderSettings() {
       <label class="checkbox_label"><input type="checkbox" id="rs_enabled"> 重新生成时保留旧版本</label>
       <label>每条消息最多保留版本数<input type="number" id="rs_max" class="text_pole" min="2"></label>
       <label class="checkbox_label"><input type="checkbox" id="rs_ball_on"> 显示悬浮球</label>
-      <label>悬浮球大小（像素，原图形状时是最长边）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="80"></label>
+      <label>悬浮球大小（像素，30–300）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="300"></label>
       <div>悬浮球图片</div>
       <div class="rs_ball_img_row">
         <div class="menu_button" id="rs_ball_upload">上传图片</div>
@@ -1029,8 +1024,8 @@ function renderSettings() {
       <input type="text" id="rs_ball_url" class="text_pole" placeholder="或者粘贴图片链接">
       <label>图片形状
         <select id="rs_ball_shape" class="text_pole">
+          <option value="square">正方形</option>
           <option value="original">原图形状</option>
-          <option value="circle">圆形</option>
         </select>
       </label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
@@ -1052,7 +1047,8 @@ function renderSettings() {
         renderBall();
     });
     $('#rs_ball_size').val(s.ballSize).on('change', function () {
-        settings().ballSize = Math.min(80, Math.max(30, parseInt(this.value) || DEFAULTS.ballSize));
+        settings().ballSize = Math.min(300, Math.max(30, parseInt(this.value) || DEFAULTS.ballSize));
+        $(this).val(settings().ballSize);
         ctx().saveSettingsDebounced();
         renderBall();
     });
@@ -1064,7 +1060,7 @@ function renderSettings() {
     $('#rs_ball_url').val(String(s.ballImage).startsWith('data:') ? '' : s.ballImage).on('change', function () {
         setBallImage(this.value.trim());
     });
-    $('#rs_ball_shape').val(s.ballShape).on('change', function () {
+    $('#rs_ball_shape').val(s.ballShape === 'original' ? 'original' : 'square').on('change', function () {
         settings().ballShape = this.value;
         ctx().saveSettingsDebounced();
         renderBall();
