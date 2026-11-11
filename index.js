@@ -18,6 +18,7 @@ const DEFAULTS = {
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
     lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
     clicheOn: true,    // 楼层编辑时是否标出八股词
+    clicheWhole: true, // true = 把带八股词的整句标出来；false = 只标那几个字
     // 八股词表：一行一个；用 /.../ 包起来的是正则，可以匹配变体
     clicheWords: [
         '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
@@ -168,7 +169,30 @@ function fmtTime(t) {
 
 // 断句：句号、问号、叹号、省略号后断开，后引号跟着前一句
 function splitSentences(line) {
-    return line.match(/[^。！？!?…]+(?:[。！？!?…]+[”’」』"']*)|[^。！？!?…]+$/g) || [line];
+    return line.match(/[^。！？!?…]*[。！？!?…]+[”’」』"']*|[^。！？!?…]+$/g) || [line];
+}
+
+// 把整段文字拆成句子集合，用来对比改前改后（整句完全一样才算没改）
+function sentenceSet(text) {
+    const set = new Set();
+    String(text).split('\n').forEach(line => {
+        if (line.trim()) splitSentences(line).forEach(x => x.trim() && set.add(x.trim()));
+    });
+    return set;
+}
+
+// 正文里新增或改过的句子，包成 <mark>
+function markAdded(text, refSet) {
+    let count = 0;
+    const html = String(text).split('\n').map(line => {
+        if (!line.trim()) return escapeHtml(line);
+        return splitSentences(line).map(x => {
+            if (!x.trim() || refSet.has(x.trim())) return escapeHtml(x);
+            count++;
+            return `<mark class="rs_add">${escapeHtml(x)}</mark>`;
+        }).join('');
+    }).join('\n');
+    return { html, count };
 }
 
 // ───── 存档（存在浏览器本地 IndexedDB，不占酒馆设置文件） ─────
@@ -482,7 +506,10 @@ async function toggleWorldEntry() {
 
 // ───── 八股词 ─────
 
+const CLICHE_GAP = '[^。！？!?\\n]{0,40}?'; // 通配符最多跨 40 个字，且不跨句
+
 let clicheCache = { src: null, re: null };
+const escapeRe = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function clicheRegex() {
     const src = String(settings().clicheWords || '');
     if (clicheCache.src === src) return clicheCache.re;
@@ -497,7 +524,8 @@ function clicheRegex() {
                 console.warn('[重生成拼接] 八股词正则写错了，已跳过：', w);
             }
         } else {
-            parts.push(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+            // 「不是……而是」「因为*而」：…… 或 * 表示中间可以隔任意字
+            parts.push(w.split(/…+|\*/).map(escapeRe).join(CLICHE_GAP));
         }
     });
     clicheCache = { src, re: parts.length ? new RegExp(parts.join('|'), 'g') : null };
@@ -507,12 +535,11 @@ function clicheRegex() {
 const clicheActive = () => state.target?.kind === 'msg' && settings().clicheOn && !!clicheRegex();
 
 // 把文字转成带 <mark> 的 HTML
-function markCliche(text) {
+// 算出要标出的范围 [[开始, 结束], ...]：按词，或者把命中的整句标出
+function clicheRanges(text) {
     const re = clicheRegex();
-    if (!re) return { html: escapeHtml(text), count: 0 };
-    let html = '';
-    let last = 0;
-    let count = 0;
+    if (!re) return [];
+    const words = [];
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text))) {
@@ -520,12 +547,38 @@ function markCliche(text) {
             re.lastIndex++;
             continue;
         }
-        html += escapeHtml(text.slice(last, m.index)) + `<mark class="rs_mark">${escapeHtml(m[0])}</mark>`;
-        last = m.index + m[0].length;
-        count++;
+        words.push([m.index, m.index + m[0].length]);
     }
+    if (!settings().clicheWhole || !words.length) return words;
+
+    const out = [];
+    let off = 0;
+    text.split('\n').forEach(line => {
+        let pos = off;
+        if (line) {
+            splitSentences(line).forEach(sen => {
+                const a = pos;
+                const b = pos + sen.length;
+                pos = b;
+                if (words.some(([x, y]) => x < b && y > a)) out.push([a, b]);
+            });
+        }
+        off += line.length + 1;
+    });
+    return out;
+}
+
+// 把文字转成带 <mark> 的 HTML
+function markCliche(text) {
+    const ranges = clicheRanges(text);
+    let html = '';
+    let last = 0;
+    ranges.forEach(([a, b]) => {
+        html += escapeHtml(text.slice(last, a)) + `<mark class="rs_mark">${escapeHtml(text.slice(a, b))}</mark>`;
+        last = b;
+    });
     html += escapeHtml(text.slice(last));
-    return { html, count };
+    return { html, count: ranges.length };
 }
 
 function renderBack() {
@@ -533,22 +586,65 @@ function renderBack() {
     const $back = $('#rs_panel .rs_body_back');
     const $btn = $('#rs_panel .rs_cliche');
     if (!ta || !$back.length) return;
-    if (state.target?.kind !== 'msg') {
-        $back.empty();
-        $btn.hide();
-        return;
-    }
-    $btn.show();
-    if (!clicheActive()) {
+    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
+    const tail = ta.value.endsWith('\n') ? '\u200b' : '';
+    const isMsg = state.target?.kind === 'msg';
+    $btn.toggle(isMsg);
+    $('#rs_panel .rs_cliche_set').toggle(isMsg);
+    if (!isMsg) $('#rs_panel .rs_cliche_box').hide();
+
+    if (isMsg && clicheActive()) {
+        const { html, count } = markCliche(ta.value);
+        $back.html(html + tail);
+        $btn.text(`八股 ${count}`).addClass('rs_on').toggleClass('rs_hit', count > 0);
+    } else if (!isMsg && state.diff) {
+        const refText = state.target.refs[state.ref]?.text ?? '';
+        $back.html(refText.trim() ? markAdded(ta.value, sentenceSet(refText)).html + tail : '');
+    } else {
         $back.empty();
         $btn.text('八股 关').removeClass('rs_on rs_hit');
+    }
+    syncBackScroll();
+}
+
+// 点「八股 N」：跳到下一个八股词并选中，直接打字就能替换
+function jumpToNextCliche() {
+    if (!settings().clicheOn) {
+        settings().clicheOn = true;
+        $('#rs_cliche_on').prop('checked', true);
+        $('#rs_panel .rs_cliche_toggle').prop('checked', true);
+        ctx().saveSettingsDebounced();
+        renderBack();
+        renderRef();
         return;
     }
-    const { html, count } = markCliche(ta.value);
-    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
-    $back.html(html + (ta.value.endsWith('\n') ? '\u200b' : ''));
-    $btn.text(`八股 ${count}`).addClass('rs_on').toggleClass('rs_hit', count > 0);
+    const ta = bodyEl();
+    if (!ta) return;
+    const hits = clicheRanges(ta.value);
+    if (!hits.length) {
+        toastr.info('正文里没有八股词了');
+        return;
+    }
+    const from = state.caret ? state.caret.e : 0;
+    let i = hits.findIndex(h => h[0] >= from);
+    if (i < 0) i = 0; // 到底了从头再来
+    const [a, b] = hits[i];
+
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(a, b);
+    state.caret = { s: a, e: b };
+    const mark = $('#rs_panel .rs_body_back .rs_mark')[i];
+    if (mark) ta.scrollTop = Math.max(0, mark.offsetTop - ta.clientHeight / 3);
     syncBackScroll();
+}
+
+// 面板里直接改八股词表
+function onClicheWordsInput() {
+    settings().clicheWords = this.value;
+    $('#rs_cliche_words').val(this.value);
+    ctx().saveSettingsDebounced();
+    renderBack();
+    renderRef();
 }
 
 function syncBackScroll() {
@@ -613,11 +709,19 @@ function ensureShell() {
     <div class="rs_grip"><span></span></div>
     <div class="rs_bar">
       <div class="rs_bar_title">正文</div>
-      <div class="rs_cliche" title="点一下开关八股词高亮"></div>
+      <div class="rs_cliche" title="跳到下一个八股词"></div>
+      <div class="rs_icon rs_cliche_set fa-solid fa-list-ul" title="编辑八股词表"></div>
       <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
       <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
       <div class="rs_icon rs_ver_add fa-solid fa-bookmark" title="存为版本"></div>
       <div class="menu_button rs_save">保存</div>
+    </div>
+    <div class="rs_cliche_box">
+      <div class="rs_cliche_opts">
+        <label class="checkbox_label"><input type="checkbox" class="rs_cliche_toggle"> 标出八股词</label>
+        <label class="checkbox_label"><input type="checkbox" class="rs_cliche_whole"> 整句标出</label>
+      </div>
+      <textarea class="rs_cliche_input" rows="4" spellcheck="false" placeholder="一行一个；中间隔字用 ……，比如 不是……而是"></textarea>
     </div>
     <div class="rs_body_wrap">
       <div class="rs_body_back" aria-hidden="true"></div>
@@ -712,6 +816,7 @@ async function refreshRefs(selectVerId) {
     fillRefSelect(idx);
     updateRefButtons();
     renderRef();
+    renderBack();
 }
 
 async function saveAsVersion() {
@@ -770,12 +875,12 @@ function renderRef() {
         $('#rs_panel .rs_ref_pane').html(`<div class="rs_empty">${tip}</div>`);
         return;
     }
-    const body = state.diff ? bodyEl().value : '';
+    const bodySet = state.diff ? sentenceSet(bodyEl().value) : null;
     const html = String(refText).split('\n').map((line, li) => {
         if (!line.trim()) return '';
         const spans = splitSentences(line).map((s, si) => {
             const k = `${state.ref}-${li}-${si}`;
-            const cls = state.used.has(k) ? 'rs_used' : (state.diff && !body.includes(s.trim()) ? 'rs_gone' : '');
+            const cls = state.used.has(k) ? 'rs_used' : (bodySet && s.trim() && !bodySet.has(s.trim()) ? 'rs_gone' : '');
             const inner = clicheActive() ? markCliche(s).html : escapeHtml(s);
             return `<span class="rs_s ${cls}" data-k="${k}">${inner}</span>`;
         }).join('');
@@ -988,6 +1093,7 @@ function bindPanelEvents() {
             state.used = new Set();
             updateRefButtons();
             renderRef();
+            renderBack();
             $('#rs_panel .rs_ref_pane').scrollTop(0);
         })
         .on('change', '#rs_panel .rs_pick', async function () {
@@ -1008,6 +1114,7 @@ function bindPanelEvents() {
             state.diff = !state.diff;
             $(this).toggleClass('rs_on', state.diff);
             renderRef();
+            renderBack();
         })
         .on('click', '#rs_panel .rs_s', function () {
             insertSentence($(this).text(), String($(this).data('k')));
@@ -1027,9 +1134,26 @@ function bindPanelEvents() {
             const ok = await switchTarget(LOADERS[this.value]);
             if (!ok && prev) $(this).val(prev);
         })
-        .on('click', '#rs_panel .rs_cliche', function () {
-            settings().clicheOn = !settings().clicheOn;
-            $('#rs_cliche_on').prop('checked', settings().clicheOn);
+        .on('click', '#rs_panel .rs_cliche', jumpToNextCliche)
+        .on('click', '#rs_panel .rs_cliche_set', () => {
+            const $box = $('#rs_panel .rs_cliche_box');
+            $box.find('.rs_cliche_toggle').prop('checked', settings().clicheOn);
+            $box.find('.rs_cliche_whole').prop('checked', settings().clicheWhole);
+            $box.find('.rs_cliche_input').val(settings().clicheWords);
+            $box.toggle();
+            $('#rs_panel .rs_cliche_set').toggleClass('rs_on', $box.is(':visible'));
+        })
+        .on('change', '#rs_panel .rs_cliche_toggle', function () {
+            settings().clicheOn = this.checked;
+            $('#rs_cliche_on').prop('checked', this.checked);
+            ctx().saveSettingsDebounced();
+            renderBack();
+            renderRef();
+        })
+        .on('input', '#rs_panel .rs_cliche_input', onClicheWordsInput)
+        .on('change', '#rs_panel .rs_cliche_whole', function () {
+            settings().clicheWhole = this.checked;
+            $('#rs_cliche_whole').prop('checked', this.checked);
             ctx().saveSettingsDebounced();
             renderBack();
             renderRef();
@@ -1177,7 +1301,8 @@ function renderSettings() {
         </select>
       </label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
-      <label>八股词表（一行一个，用 /.../ 包起来是正则）
+      <label class="checkbox_label"><input type="checkbox" id="rs_cliche_whole"> 八股词整句标出</label>
+      <label>八股词表（一行一个；中间隔字用 ……，比如 不是……而是；用 /.../ 包起来是正则）
         <textarea id="rs_cliche_words" class="text_pole" rows="6"></textarea>
       </label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
@@ -1236,6 +1361,11 @@ function renderSettings() {
     });
     $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () {
         settings().clicheOn = this.checked;
+        ctx().saveSettingsDebounced();
+        renderBack();
+    });
+    $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () {
+        settings().clicheWhole = this.checked;
         ctx().saveSettingsDebounced();
         renderBack();
     });

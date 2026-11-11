@@ -159,6 +159,39 @@
     border-color: rgba(255, 170, 0, 0.8);
 }
 
+#rs_panel .rs_icon.rs_cliche_set.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+/* 面板里的八股词表 */
+#rs_panel .rs_cliche_box {
+    display: none;
+    flex: none;
+    padding: 8px 16px 10px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_cliche_opts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+}
+
+#rs_panel .rs_cliche_input {
+    width: 100%;
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    border: 1px solid var(--rs-line) !important;
+    background: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: vertical;
+}
+
 /* ───── 编辑对象选择（角色字段 / 世界书和条目） ───── */
 #rs_panel .rs_pickers {
     flex: none;
@@ -312,6 +345,13 @@
 #rs_panel .rs_body_back .rs_mark {
     color: transparent;
     background: var(--rs-cliche);
+    border-radius: 3px;
+}
+
+/* 改动对比：正文里新增或改过的句子 */
+#rs_panel .rs_body_back .rs_add {
+    color: transparent;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); /* 新增句子的底色 */
     border-radius: 3px;
 }
 
