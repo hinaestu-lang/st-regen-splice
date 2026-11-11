@@ -1,6 +1,7 @@
-// 重生成拼接 v0.1.0
+// 重生成拼接 v0.2.0
 // 1. 点「重新生成」时，把被删掉的旧回复塞回新回复的 swipes 里，左右翻就能看到
-// 2. 剪刀按钮 / 悬浮球打开面板：按段落挑选拼接，也能直接改正文
+// 2. 悬浮球菜单：本楼拼接、角色卡、用户人设、世界书，都在同一个上下分屏面板里改
+// 3. 角色卡 / 人设 / 世界书保存时自动留存改前改后，可在参考区对比
 
 const MODULE = 'regenSplice';
 
@@ -10,6 +11,10 @@ const DEFAULTS = {
     ball: true,        // 是否显示悬浮球
     ballSize: 46,      // 悬浮球直径（像素）
     ballPos: null,     // 悬浮球位置，拖动后自动记录，不用手动改
+    ballImage: '',     // 悬浮球图片：上传后自动生成，也可以填图片链接；留空用默认图标
+    ballImageSize: 160, // 上传图片压缩后的边长（像素），越大越清晰、占的空间越多
+    splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
+    snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -109,11 +114,25 @@ function refreshSwipeUI(id, msg) {
     }
 }
 
-// ───────────── 拼接面板 ─────────────
-// 「挑选」：各版本按段落排成卡片，点一下选中，按点的顺序编号
-// 「成稿」：选中的段落按顺序排好，点文字直接改，可上下移、删除、新增
+// ───────────── 编辑面板（消息 / 角色卡 / 用户人设 / 世界书 共用） ─────────────
+// 上半屏：参考（消息是各个版本，其他是打开时的内容 + 历史存档），点句子插到下面
+// 下半屏：正文，直接点就能改
+// 中间横条可拖动调整上下比例
 
 const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div>';
+const UNDO_LIMIT = 100;   // 最多可撤销的步数
+const TYPING_PAUSE = 800; // 打字停顿多少毫秒算一步撤销
+
+// 角色卡可编辑字段：[字段名, 显示名, 酒馆编辑框选择器, 是否只在 data 里]
+const CHAR_FIELDS = [
+    ['description', '描述', '#description_textarea', false],
+    ['personality', '性格', '#personality_textarea', false],
+    ['scenario', '场景', '#scenario_pole', false],
+    ['first_mes', '开场白', '#firstmessage_textarea', false],
+    ['mes_example', '对话示例', '#mes_example_textarea', false],
+    ['system_prompt', '系统提示词', null, true],
+    ['post_history_instructions', '后置指令', null, true],
+];
 
 function injectButtons() {
     const $tpl = $('#message_template .mes_buttons .extraMesButtons');
@@ -123,252 +142,107 @@ function injectButtons() {
     });
 }
 
-const state = {
-    id: -1,
-    versions: [],   // [[{text, sep}, ...], ...] 每个版本拆成段落
-    cur: 0,         // 当前显示的版本
-    items: [],      // 成稿 [{key, from, text, sep}]
-    tab: 'pick',
-    collapsed: new Set(),
-    editing: -1,
-    newCount: 0,
-};
-
 function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
-// 按换行拆段，保留原本的换行方式（单换行 / 空一行）
-function splitParas(text) {
-    const parts = String(text).split(/(\n+)/);
-    const out = [];
-    for (let i = 0; i < parts.length; i += 2) {
-        if (!parts[i].trim()) continue;
-        out.push({ text: parts[i], sep: parts[i + 1] || '\n' });
-    }
-    return out;
+function fmtTime(t) {
+    const d = new Date(t);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function joinItems() {
-    return state.items.map((it, i) => (i < state.items.length - 1 ? it.text + it.sep : it.text)).join('');
+// 断句：句号、问号、叹号、省略号后断开，后引号跟着前一句
+function splitSentences(line) {
+    return line.match(/[^。！？!?…]+(?:[。！？!?…]+[”’」』"']*)|[^。！？!?…]+$/g) || [line];
 }
 
-function openPanel(id) {
-    const msg = ctx().chat[id];
-    if (!msg) return;
+// ───── 存档（存在浏览器本地 IndexedDB，不占酒馆设置文件） ─────
 
-    const raw = Array.isArray(msg.swipes) && msg.swipes.length ? [...msg.swipes] : [msg.mes];
-    const cur = Number.isInteger(msg.swipe_id) ? msg.swipe_id : 0;
-    raw[cur] = msg.mes;
-
-    const versions = raw.map(splitParas);
-    // 默认成稿 = 当前版本全部段落，所以不拼接也能直接改正文
-    const items = versions[cur].map((p, i) => ({ key: `${cur}-${i}`, from: cur, text: p.text, sep: p.sep }));
-
-    Object.assign(state, {
-        id, versions, cur, items,
-        tab: versions.length > 1 ? 'pick' : 'draft',
-        collapsed: new Set(),
-        editing: -1,
-        newCount: 0,
-    });
-
-    $('#rs_overlay').remove();
-    $('body').append(`
-<div id="rs_overlay">
-  <div id="rs_panel">
-    <div class="rs_head">
-      <div class="rs_title">第 ${id} 楼</div>
-      <div class="rs_seg">
-        <div class="rs_seg_btn" data-tab="pick">挑选</div>
-        <div class="rs_seg_btn" data-tab="draft">成稿</div>
-      </div>
-      <div class="rs_close fa-solid fa-xmark" title="关闭"></div>
-    </div>
-    <div class="rs_body"></div>
-    <div class="rs_foot"></div>
-  </div>
-</div>`);
-    render();
-}
-
-function render(keepScroll = true) {
-    const $body = $('#rs_panel .rs_body');
-    const top = $body.scrollTop();
-
-    $('#rs_panel .rs_seg_btn').each(function () {
-        const t = $(this).data('tab');
-        $(this).toggleClass('rs_on', t === state.tab);
-        if (t === 'draft') $(this).text(`成稿 ${state.items.length}`);
-    });
-
-    if (state.tab === 'pick') {
-        $body.html(renderPick());
-        $('#rs_panel .rs_foot').html(`
-<div class="rs_foot_info">已选 ${state.items.length} 段</div>
-<div class="menu_button rs_go_draft">看成稿</div>`);
-    } else {
-        $body.html(renderDraft());
-        $('#rs_panel .rs_foot').html(`
-<div class="menu_button rs_copy">复制</div>
-<div class="menu_button rs_save rs_primary">写回正文</div>`);
-    }
-
-    if (keepScroll) $body.scrollTop(top);
-}
-
-function renderPick() {
-    const order = new Map(state.items.map((it, i) => [it.key, i + 1]));
-    return state.versions.map((paras, v) => {
-        const picked = paras.filter((_, p) => order.has(`${v}-${p}`)).length;
-        const folded = state.collapsed.has(v);
-        const cards = folded ? '' : paras.map((para, p) => {
-            const n = order.get(`${v}-${p}`);
-            return `
-<div class="rs_card ${n ? 'rs_sel' : ''}" data-key="${v}-${p}">
-  <div class="rs_text">${escapeHtml(para.text)}</div>
-  ${n ? `<div class="rs_badge">${n}</div>` : ''}
-</div>`;
-        }).join('');
-        return `
-<div class="rs_group">
-  <div class="rs_group_head" data-v="${v}">
-    <div class="rs_group_name">版本 ${v + 1}${v === state.cur ? '<span class="rs_tag">当前</span>' : ''}</div>
-    <div class="rs_group_count">${picked}/${paras.length}</div>
-    <div class="rs_group_all" data-v="${v}">${picked === paras.length ? '全不选' : '全选'}</div>
-    <div class="fa-solid ${folded ? 'fa-chevron-down' : 'fa-chevron-up'} rs_group_fold"></div>
-  </div>
-  ${cards}
-</div>`;
-    }).join('');
-}
-
-function renderDraft() {
-    if (!state.items.length) {
-        return `<div class="rs_empty">还没有段落。去「挑选」里点几段，或者在下面新增一段。</div>
-<div class="rs_add_para">+ 新增一段</div>`;
-    }
-    const cards = state.items.map((it, i) => {
-        const from = it.from < 0 ? '新增' : `版本 ${it.from + 1}`;
-        const body = i === state.editing
-            ? `<textarea class="rs_edit" rows="1"></textarea>`
-            : `<div class="rs_text rs_tap_edit">${escapeHtml(it.text) || '<span class="rs_placeholder">点这里输入</span>'}</div>`;
-        return `
-<div class="rs_card rs_draft ${i === state.editing ? 'rs_editing' : ''}" data-i="${i}">
-  <div class="rs_meta">
-    <span>${from}</span>
-    <div class="rs_ops">
-      <div class="fa-solid fa-arrow-up rs_up" title="上移"></div>
-      <div class="fa-solid fa-arrow-down rs_down" title="下移"></div>
-      <div class="fa-solid fa-trash-can rs_del" title="删除"></div>
-    </div>
-  </div>
-  ${body}
-</div>`;
-    }).join('');
-    return cards + '<div class="rs_add_para">+ 新增一段</div>';
-}
-
-function autoGrow(ta) {
-    ta.style.height = 'auto';
-    ta.style.height = ta.scrollHeight + 'px';
-}
-
-function startEdit(i) {
-    commitEdit();
-    state.editing = i;
-    render();
-    const ta = $('#rs_panel .rs_edit')[0];
-    if (!ta) return;
-    ta.value = state.items[i].text;
-    autoGrow(ta);
-    ta.focus();
-}
-
-function commitEdit() {
-    if (state.editing < 0) return;
-    const ta = $('#rs_panel .rs_edit')[0];
-    if (ta && state.items[state.editing]) state.items[state.editing].text = ta.value;
-    state.editing = -1;
-}
-
-function togglePick(key) {
-    const idx = state.items.findIndex(it => it.key === key);
-    if (idx >= 0) {
-        state.items.splice(idx, 1);
-    } else {
-        const [v, p] = key.split('-').map(Number);
-        const para = state.versions[v][p];
-        state.items.push({ key, from: v, text: para.text, sep: para.sep });
-    }
-    render();
-}
-
-function toggleAll(v) {
-    const paras = state.versions[v];
-    const keys = paras.map((_, p) => `${v}-${p}`);
-    const allPicked = keys.every(k => state.items.some(it => it.key === k));
-    if (allPicked) {
-        state.items = state.items.filter(it => !keys.includes(it.key));
-    } else {
-        keys.forEach((k, p) => {
-            if (!state.items.some(it => it.key === k)) state.items.push({ key: k, from: v, text: paras[p].text, sep: paras[p].sep });
+let dbPromise = null;
+function db() {
+    if (!dbPromise) {
+        dbPromise = new Promise((res, rej) => {
+            const r = indexedDB.open('regenSplice', 1);
+            r.onupgradeneeded = () => r.result.createObjectStore('snaps');
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => rej(r.error);
         });
     }
-    render();
+    return dbPromise;
 }
 
-function moveItem(i, d) {
-    commitEdit();
-    const j = i + d;
-    if (j < 0 || j >= state.items.length) return;
-    [state.items[i], state.items[j]] = [state.items[j], state.items[i]];
-    render();
-}
-
-function delItem(i) {
-    commitEdit();
-    state.items.splice(i, 1);
-    render();
-}
-
-function addPara() {
-    commitEdit();
-    state.items.push({ key: `new-${state.newCount++}`, from: -1, text: '', sep: '\n' });
-    startEdit(state.items.length - 1);
-}
-
-function closePanel() {
-    $('#rs_overlay').remove();
-}
-
-async function copyText(text) {
+async function getSnaps(key) {
     try {
-        await navigator.clipboard.writeText(text);
+        const d = await db();
+        return await new Promise(res => {
+            const q = d.transaction('snaps').objectStore('snaps').get(key);
+            q.onsuccess = () => res(q.result || []);
+            q.onerror = () => res([]);
+        });
     } catch {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
+        return [];
     }
-    toastr.success('已复制');
 }
 
-async function writeBack() {
-    commitEdit();
-    state.items = state.items.filter(it => it.text.trim());
-    const text = joinItems();
-    if (!text.trim()) {
-        toastr.warning('成稿是空的');
-        render();
-        return;
+async function addSnaps(key, before, after) {
+    try {
+        let arr = await getSnaps(key);
+        const push = text => {
+            if (!arr.length || arr[arr.length - 1].text !== text) arr.push({ time: Date.now(), text });
+        };
+        push(before);
+        push(after);
+        const max = Math.max(2, parseInt(settings().snapKeep) || DEFAULTS.snapKeep);
+        if (arr.length > max) arr = arr.slice(-max);
+        const d = await db();
+        await new Promise(res => {
+            const tx = d.transaction('snaps', 'readwrite');
+            tx.objectStore('snaps').put(arr, key);
+            tx.oncomplete = res;
+            tx.onerror = res;
+        });
+    } catch (e) {
+        console.warn('[重生成拼接] 存档失败', e);
     }
-    const c = ctx();
-    const msg = c.chat[state.id];
-    if (!msg) return;
+}
 
+async function snapRefs(key, initial) {
+    const snaps = (await getSnaps(key)).slice().reverse();
+    const refs = [{ label: '打开时', text: initial }];
+    snaps.forEach(s => {
+        if (s.text !== initial) refs.push({ label: `存档 ${fmtTime(s.time)}`, text: s.text });
+    });
+    return refs;
+}
+
+// ───── 各种编辑对象 ─────
+
+function msgTarget(id) {
+    const msg = ctx().chat[id];
+    if (!msg) return null;
+    const versions = Array.isArray(msg.swipes) && msg.swipes.length ? [...msg.swipes] : [msg.mes];
+    const cur = Number.isInteger(msg.swipe_id) ? msg.swipe_id : 0;
+    versions[cur] = msg.mes;
+    let ref = cur > 0 ? cur - 1 : versions.length - 1;
+    if (versions.length === 1) ref = 0;
+    return {
+        kind: 'msg',
+        title: `第 ${id} 楼`,
+        pickers: '',
+        refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: t })),
+        ref,
+        initial: msg.mes,
+        saveLabel: '写回',
+        closeAfterSave: true,
+        save: text => saveMessage(id, text),
+    };
+}
+
+async function saveMessage(id, text) {
+    const c = ctx();
+    const msg = c.chat[id];
+    if (!msg) return false;
     if (!Array.isArray(msg.swipes) || !msg.swipes.length) {
         msg.swipes = [msg.mes];
         msg.swipe_id = 0;
@@ -382,12 +256,435 @@ async function writeBack() {
     msg.swipe_id = msg.swipes.length - 1;
     msg.mes = text;
 
-    c.updateMessageBlock(state.id, msg);
-    refreshSwipeUI(state.id, msg);
+    c.updateMessageBlock(id, msg);
+    refreshSwipeUI(id, msg);
     await c.saveChat();
+    toastr.success('已写回，原版本可左右翻找回');
+    return true;
+}
 
-    closePanel();
-    toastr.success('已写回正文，原版本可左右翻找回');
+function currentChar() {
+    const c = ctx();
+    if (c.characterId === undefined || c.characterId === null || c.characterId === '') return null;
+    return c.characters[c.characterId] || null;
+}
+
+async function charTarget(field = 'description') {
+    const ch = currentChar();
+    if (!ch) {
+        toastr.warning('先打开一个角色的单人聊天');
+        return null;
+    }
+    const def = CHAR_FIELDS.find(f => f[0] === field) || CHAR_FIELDS[0];
+    const [f, , selector, dataOnly] = def;
+    const initial = String((dataOnly ? ch.data?.[f] : ch[f] ?? ch.data?.[f]) ?? '');
+    const key = `char:${ch.avatar}:${f}`;
+    const opts = CHAR_FIELDS.map(([k, label]) => `<option value="${k}" ${k === f ? 'selected' : ''}>${label}</option>`).join('');
+
+    return {
+        kind: 'char',
+        title: `角色卡：${escapeHtml(ch.name)}`,
+        pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
+        refs: await snapRefs(key, initial),
+        ref: 0,
+        initial,
+        saveLabel: '保存',
+        closeAfterSave: false,
+        save: async text => {
+            const body = { avatar: ch.avatar, data: { [f]: text } };
+            if (!dataOnly) body[f] = text;
+            const res = await fetch('/api/characters/merge-attributes', {
+                method: 'POST',
+                headers: ctx().getRequestHeaders(),
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                toastr.error('保存角色卡失败');
+                return false;
+            }
+            ch.data = ch.data || {};
+            ch.data[f] = text;
+            if (!dataOnly) ch[f] = text;
+            if (selector) $(selector).val(text); // 同步酒馆自己的编辑框，避免被旧内容覆盖
+            await addSnaps(key, initial, text);
+            toastr.success('角色卡已保存');
+            return true;
+        },
+    };
+}
+
+async function personaTarget() {
+    const c = ctx();
+    const $box = $('#persona_description');
+    if (!$box.length) {
+        toastr.warning('找不到用户人设');
+        return null;
+    }
+    const initial = String($box.val() ?? '');
+    const key = `persona:${c.name1}`;
+    return {
+        kind: 'persona',
+        title: `用户人设：${escapeHtml(c.name1)}`,
+        pickers: '',
+        refs: await snapRefs(key, initial),
+        ref: 0,
+        initial,
+        saveLabel: '保存',
+        closeAfterSave: false,
+        save: async text => {
+            $('#persona_description').val(text).trigger('input'); // 交给酒馆自己保存
+            await addSnaps(key, initial, text);
+            toastr.success('用户人设已保存');
+            return true;
+        },
+    };
+}
+
+function worldNames() {
+    return $('#world_editor_select option').map(function () {
+        return $(this).val() === '' ? null : $(this).text();
+    }).get().filter(Boolean);
+}
+
+async function worldTarget(book, uid) {
+    const c = ctx();
+    const names = worldNames();
+    if (!names.length) {
+        toastr.warning('还没有世界书');
+        return null;
+    }
+    if (!book || !names.includes(book)) {
+        const bound = currentChar()?.data?.extensions?.world;
+        const globalOn = $('#world_info option:selected').first().text();
+        book = names.includes(bound) ? bound : names.includes(globalOn) ? globalOn : names[0];
+    }
+
+    const data = await c.loadWorldInfo(book);
+    const entries = Object.values(data?.entries || {})
+        .sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid));
+
+    const bookOpts = names.map(n => `<option ${n === book ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+    if (!entries.length) {
+        return {
+            kind: 'world', title: '世界书',
+            pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>`,
+            refs: [{ label: '打开时', text: '' }], ref: 0, initial: '', empty: '这本世界书还没有条目',
+            saveLabel: '保存', closeAfterSave: false, save: async () => false,
+        };
+    }
+
+    const entry = entries.find(e => String(e.uid) === String(uid)) || entries[0];
+    const entryLabel = e => e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid}`;
+    const entryOpts = entries.map(e =>
+        `<option value="${e.uid}" ${e === entry ? 'selected' : ''}>${escapeHtml(entryLabel(e))}${e.disable ? '（已禁用）' : ''}</option>`).join('');
+    const initial = String(entry.content ?? '');
+    const key = `wi:${book}:${entry.uid}`;
+
+    return {
+        kind: 'world',
+        title: '世界书',
+        pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
+<select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>`,
+        book,
+        refs: await snapRefs(key, initial),
+        ref: 0,
+        initial,
+        saveLabel: '保存',
+        closeAfterSave: false,
+        save: async text => {
+            const fresh = await ctx().loadWorldInfo(book);
+            if (!fresh?.entries?.[entry.uid]) {
+                toastr.error('这个条目已经不存在了');
+                return false;
+            }
+            fresh.entries[entry.uid].content = text;
+            await ctx().saveWorldInfo(book, fresh, true);
+            try { ctx().reloadWorldInfoEditor?.(book, false); } catch { /* 编辑器没打开时忽略 */ }
+            await addSnaps(key, initial, text);
+            toastr.success('世界书条目已保存');
+            return true;
+        },
+    };
+}
+
+// ───── 面板 ─────
+
+const state = {
+    target: null,
+    ref: 0,
+    used: new Set(),
+    diff: false,
+    caret: null,
+    undo: [],
+    redo: [],
+    last: null,
+    typing: false,
+    typingTimer: null,
+    diffTimer: null,
+};
+
+const bodyEl = () => $('#rs_panel .rs_body_text')[0];
+const snap = () => {
+    const ta = bodyEl();
+    return { v: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
+};
+const isDirty = () => !!state.target && !!bodyEl() && bodyEl().value !== state.target.initial;
+
+function ensureShell() {
+    if ($('#rs_overlay').length) return;
+    $('body').append(`
+<div id="rs_overlay">
+  <div id="rs_panel">
+    <div class="rs_bar rs_top">
+      <div class="rs_bar_title rs_title"></div>
+      <div class="rs_icon rs_close fa-solid fa-xmark" title="关闭"></div>
+    </div>
+    <div class="rs_pickers"></div>
+    <div class="rs_bar">
+      <div class="rs_bar_title">参考</div>
+      <div class="rs_icon rs_diff fa-solid fa-highlighter" title="标出正文里没有的句子"></div>
+      <select class="rs_ref text_pole"></select>
+    </div>
+    <div class="rs_ref_pane"></div>
+    <div class="rs_grip"><span></span></div>
+    <div class="rs_bar">
+      <div class="rs_bar_title">正文</div>
+      <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
+      <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
+      <div class="menu_button rs_save">保存</div>
+    </div>
+    <textarea class="rs_body_text" spellcheck="false"></textarea>
+  </div>
+</div>`);
+    const ratio = Math.min(0.8, Math.max(0.15, Number(settings().splitRatio) || DEFAULTS.splitRatio));
+    $('#rs_panel .rs_ref_pane').css('height', Math.round($('#rs_panel').height() * ratio) + 'px');
+}
+
+function showTarget(t) {
+    if (!t) return;
+    ensureShell();
+    Object.assign(state, { target: t, ref: t.ref, used: new Set(), caret: null, undo: [], redo: [], typing: false });
+
+    $('#rs_panel .rs_title').html(t.title);
+    $('#rs_panel .rs_pickers').html(t.pickers).toggle(!!t.pickers);
+    $('#rs_panel .rs_ref').html(t.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('')).val(String(t.ref));
+    $('#rs_panel .rs_save').text(t.saveLabel);
+    $('#rs_panel .rs_diff').toggleClass('rs_on', state.diff);
+
+    const ta = bodyEl();
+    ta.value = t.initial;
+    ta.placeholder = t.empty || '';
+    ta.readOnly = !!t.empty;
+    state.last = snap();
+    renderRef();
+    updateUndoButtons();
+    $('#rs_panel .rs_ref_pane').scrollTop(0);
+    ta.scrollTop = 0;
+}
+
+async function switchTarget(loader) {
+    if (isDirty() && !confirm('正文改了还没保存，切换会丢掉改动，继续吗？')) return false;
+    showTarget(await loader());
+    return true;
+}
+
+function renderRef() {
+    const t = state.target;
+    const refText = t.refs[state.ref]?.text ?? '';
+    if (!refText.trim()) {
+        const tip = t.kind === 'msg' ? '' : '还没有存档。保存后会自动留存改前和改后的内容，之后可以在这里对比。';
+        $('#rs_panel .rs_ref_pane').html(`<div class="rs_empty">${tip}</div>`);
+        return;
+    }
+    const body = state.diff ? bodyEl().value : '';
+    const html = String(refText).split('\n').map((line, li) => {
+        if (!line.trim()) return '';
+        const spans = splitSentences(line).map((s, si) => {
+            const k = `${state.ref}-${li}-${si}`;
+            const cls = state.used.has(k) ? 'rs_used' : (state.diff && !body.includes(s.trim()) ? 'rs_gone' : '');
+            return `<span class="rs_s ${cls}" data-k="${k}">${escapeHtml(s)}</span>`;
+        }).join('');
+        return `<p>${spans}</p>`;
+    }).join('');
+    $('#rs_panel .rs_ref_pane').html(html);
+}
+
+function pushUndo() {
+    state.undo.push(state.last);
+    if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+    state.redo = [];
+}
+
+function applySnap(sn) {
+    const ta = bodyEl();
+    ta.value = sn.v;
+    state.caret = { s: sn.s, e: sn.e };
+    try { ta.setSelectionRange(sn.s, sn.e); } catch { /* 忽略 */ }
+    state.last = snap();
+    if (state.diff) renderRef();
+}
+
+function updateUndoButtons() {
+    $('#rs_panel .rs_undo').toggleClass('rs_off', !state.undo.length);
+    $('#rs_panel .rs_redo').toggleClass('rs_off', !state.redo.length);
+}
+
+function insertSentence(text, key) {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const val = ta.value;
+    let s = val.length;
+    let e = val.length;
+    if (state.caret) {
+        s = Math.min(state.caret.s, val.length);
+        e = Math.min(state.caret.e, val.length);
+    }
+    state.typing = false;
+    pushUndo();
+    ta.value = val.slice(0, s) + text + val.slice(e);
+    const pos = s + text.length;
+    state.caret = { s: pos, e: pos };
+    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
+    state.last = { v: ta.value, s: pos, e: pos };
+    state.used.add(key);
+    renderRef();
+    updateUndoButtons();
+
+    ta.classList.remove('rs_flash');
+    void ta.offsetWidth;
+    ta.classList.add('rs_flash');
+}
+
+function onBodyInput() {
+    const ta = bodyEl();
+    if (!state.typing) pushUndo();
+    state.typing = true;
+    clearTimeout(state.typingTimer);
+    state.typingTimer = setTimeout(() => { state.typing = false; }, TYPING_PAUSE);
+    state.caret = { s: ta.selectionStart, e: ta.selectionEnd };
+    state.last = snap();
+    updateUndoButtons();
+    if (state.diff) {
+        clearTimeout(state.diffTimer);
+        state.diffTimer = setTimeout(renderRef, 400);
+    }
+}
+
+function doUndo() {
+    if (!state.undo.length) return;
+    state.typing = false;
+    state.redo.push(snap());
+    applySnap(state.undo.pop());
+    updateUndoButtons();
+}
+
+function doRedo() {
+    if (!state.redo.length) return;
+    state.typing = false;
+    state.undo.push(snap());
+    applySnap(state.redo.pop());
+    updateUndoButtons();
+}
+
+let gripDrag = null;
+function onGripDown(e) {
+    gripDrag = { y: e.clientY, h: $('#rs_panel .rs_ref_pane')[0].offsetHeight };
+    e.target.setPointerCapture?.(e.pointerId);
+}
+function onGripMove(e) {
+    if (!gripDrag) return;
+    const total = $('#rs_panel').height();
+    const h = Math.min(total * 0.8, Math.max(total * 0.15, gripDrag.h + e.clientY - gripDrag.y));
+    $('#rs_panel .rs_ref_pane').css('height', h + 'px');
+}
+function onGripUp() {
+    if (!gripDrag) return;
+    gripDrag = null;
+    settings().splitRatio = $('#rs_panel .rs_ref_pane').height() / $('#rs_panel').height();
+    ctx().saveSettingsDebounced();
+}
+
+function closePanel(force = false) {
+    if (!force && isDirty() && !confirm('正文改了还没保存，确定关闭吗？')) return;
+    clearTimeout(state.typingTimer);
+    clearTimeout(state.diffTimer);
+    state.target = null;
+    $('#rs_overlay').remove();
+}
+
+async function onSave() {
+    const t = state.target;
+    const text = String(bodyEl().value);
+    if (t.empty) return;
+    if (text === t.initial) {
+        toastr.info('没有改动');
+        return;
+    }
+    if (t.kind === 'msg' && !text.trim()) {
+        toastr.warning('正文是空的');
+        return;
+    }
+    const $btn = $('#rs_panel .rs_save').addClass('rs_off');
+    const ok = await t.save(text);
+    $btn.removeClass('rs_off');
+    if (!ok) return;
+    if (t.closeAfterSave) {
+        closePanel(true);
+        return;
+    }
+    // 留在面板里，刷新存档列表
+    t.initial = text;
+    reloadCurrent();
+}
+
+async function reloadCurrent() {
+    const t = state.target;
+    if (t.kind === 'char') showTarget(await charTarget($('#rs_panel .rs_pick[data-pick="char"]').val()));
+    else if (t.kind === 'persona') showTarget(await personaTarget());
+    else if (t.kind === 'world') showTarget(await worldTarget(t.book, $('#rs_panel .rs_pick[data-pick="entry"]').val()));
+}
+
+// 对外入口
+function openPanel(id) {
+    showTarget(msgTarget(id));
+}
+
+// ───── 悬浮球菜单 ─────
+
+function openMenu() {
+    if ($('#rs_menu').length) {
+        $('#rs_menu').remove();
+        return;
+    }
+    const ball = document.getElementById('rs_ball');
+    const r = ball.getBoundingClientRect();
+    const $m = $(`
+<div id="rs_menu">
+  <div class="rs_menu_item" data-go="msg"><i class="fa-solid fa-scissors"></i>本楼拼接</div>
+  <div class="rs_menu_item" data-go="char"><i class="fa-solid fa-id-card"></i>角色卡</div>
+  <div class="rs_menu_item" data-go="persona"><i class="fa-solid fa-user"></i>用户人设</div>
+  <div class="rs_menu_item" data-go="world"><i class="fa-solid fa-book-atlas"></i>世界书</div>
+</div>`).appendTo('body');
+    const w = $m.outerWidth();
+    const h = $m.outerHeight();
+    const left = r.left + r.width / 2 > window.innerWidth / 2 ? r.left - w - 8 : r.right + 8;
+    const top = Math.min(Math.max(8, r.top + r.height / 2 - h / 2), window.innerHeight - h - 8);
+    $m.css({ left: Math.max(8, left) + 'px', top: top + 'px' });
+}
+
+async function onMenuPick(go) {
+    $('#rs_menu').remove();
+    if (go === 'msg') {
+        const id = lastAiIndex();
+        if (id < 0) return toastr.warning('当前聊天里还没有 AI 回复');
+        openPanel(id);
+    } else if (go === 'char') {
+        showTarget(await charTarget());
+    } else if (go === 'persona') {
+        showTarget(await personaTarget());
+    } else if (go === 'world') {
+        showTarget(await worldTarget());
+    }
 }
 
 function bindPanelEvents() {
@@ -398,45 +695,50 @@ function bindPanelEvents() {
         .on('click', '#rs_overlay', function (e) {
             if (e.target === this) closePanel();
         })
-        .on('click', '#rs_panel .rs_close', closePanel)
-        .on('click', '#rs_panel .rs_seg_btn', function () {
-            commitEdit();
-            state.tab = $(this).data('tab');
-            render(false);
-            $('#rs_panel .rs_body').scrollTop(0);
+        .on('click', '#rs_panel .rs_close', () => closePanel())
+        .on('change', '#rs_panel .rs_ref', function () {
+            state.ref = Number(this.value);
+            state.used = new Set();
+            renderRef();
+            $('#rs_panel .rs_ref_pane').scrollTop(0);
         })
-        .on('click', '#rs_panel .rs_go_draft', () => {
-            state.tab = 'draft';
-            render(false);
-            $('#rs_panel .rs_body').scrollTop(0);
+        .on('change', '#rs_panel .rs_pick', async function () {
+            const pick = $(this).data('pick');
+            const val = $(this).val();
+            const prev = this.dataset.prev ?? $(this).find('option[selected]').val();
+            let ok = true;
+            if (pick === 'char') ok = await switchTarget(() => charTarget(val));
+            if (pick === 'book') ok = await switchTarget(() => worldTarget(val));
+            if (pick === 'entry') ok = await switchTarget(() => worldTarget(state.target.book, val));
+            if (!ok && prev !== undefined) $(this).val(prev);
         })
-        // 挑选
-        .on('click', '#rs_panel .rs_card:not(.rs_draft)', function () { togglePick(String($(this).data('key'))); })
-        .on('click', '#rs_panel .rs_group_all', function (e) {
-            e.stopPropagation();
-            toggleAll(Number($(this).data('v')));
+        .on('click', '#rs_panel .rs_diff', function () {
+            state.diff = !state.diff;
+            $(this).toggleClass('rs_on', state.diff);
+            renderRef();
         })
-        .on('click', '#rs_panel .rs_group_head', function () {
-            const v = Number($(this).data('v'));
-            state.collapsed.has(v) ? state.collapsed.delete(v) : state.collapsed.add(v);
-            render();
+        .on('click', '#rs_panel .rs_s', function () {
+            insertSentence($(this).text(), String($(this).data('k')));
         })
-        // 成稿
-        .on('click', '#rs_panel .rs_tap_edit', function () { startEdit(Number($(this).closest('.rs_card').data('i'))); })
-        .on('input', '#rs_panel .rs_edit', function () {
-            autoGrow(this);
-            if (state.items[state.editing]) state.items[state.editing].text = this.value;
+        .on('input', '#rs_panel .rs_body_text', onBodyInput)
+        .on('click keyup select', '#rs_panel .rs_body_text', function () {
+            state.caret = { s: this.selectionStart, e: this.selectionEnd };
         })
-        .on('click', '#rs_panel .rs_up', function () { moveItem(Number($(this).closest('.rs_card').data('i')), -1); })
-        .on('click', '#rs_panel .rs_down', function () { moveItem(Number($(this).closest('.rs_card').data('i')), 1); })
-        .on('click', '#rs_panel .rs_del', function () { delItem(Number($(this).closest('.rs_card').data('i'))); })
-        .on('click', '#rs_panel .rs_add_para', addPara)
-        .on('click', '#rs_panel .rs_copy', () => {
-            commitEdit();
-            copyText(joinItems());
-            render();
-        })
-        .on('click', '#rs_panel .rs_save', writeBack);
+        .on('click', '#rs_panel .rs_undo', doUndo)
+        .on('click', '#rs_panel .rs_redo', doRedo)
+        .on('click', '#rs_panel .rs_save', onSave)
+        .on('pointerdown', '#rs_panel .rs_grip', e => onGripDown(e.originalEvent))
+        .on('pointermove', '#rs_panel .rs_grip', e => onGripMove(e.originalEvent))
+        .on('pointerup pointercancel', '#rs_panel .rs_grip', onGripUp)
+        .on('click', '#rs_menu .rs_menu_item', function () { onMenuPick($(this).data('go')); })
+        .on('pointerdown', e => {
+            if ($('#rs_menu').length && !$(e.target).closest('#rs_menu, #rs_ball').length) $('#rs_menu').remove();
+        });
+
+    document.addEventListener('selectionchange', () => {
+        const ta = document.querySelector('#rs_panel .rs_body_text');
+        if (ta && document.activeElement === ta) state.caret = { s: ta.selectionStart, e: ta.selectionEnd };
+    });
 }
 
 // ───────────── 悬浮球 ─────────────
@@ -470,8 +772,13 @@ function renderBall() {
     const s = settings();
     if (!s.ball) return;
 
-    const $b = $('<div id="rs_ball" class="fa-solid fa-scissors" title="版本拼接"></div>').appendTo('body');
+    const $b = $('<div id="rs_ball" title="编辑"></div>').appendTo('body');
     $b.css({ width: s.ballSize + 'px', height: s.ballSize + 'px', fontSize: Math.round(s.ballSize * 0.4) + 'px' });
+    if (s.ballImage) {
+        $b.addClass('rs_ball_img').css('background-image', `url("${String(s.ballImage).replace(/"/g, '%22')}")`);
+    } else {
+        $b.addClass('fa-solid fa-pen-nib');
+    }
 
     // 默认位置：右侧偏下
     const pos = s.ballPos || { x: window.innerWidth - s.ballSize - 12, y: window.innerHeight * 0.6 };
@@ -502,15 +809,33 @@ function renderBall() {
             ctx().saveSettingsDebounced();
             return;
         }
-        const id = lastAiIndex();
-        if (id < 0) {
-            toastr.warning('当前聊天里还没有 AI 回复');
-            return;
-        }
-        openPanel(id);
+        openMenu();
     });
 
     el.addEventListener('pointercancel', () => { drag = null; });
+}
+
+// 把上传的图片裁成正方形并压缩，存进设置里
+function imageToDataUrl(file) {
+    return new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onerror = () => rej(reader.error);
+        reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => rej(new Error('图片读取失败'));
+            img.onload = () => {
+                const size = Math.max(64, parseInt(settings().ballImageSize) || DEFAULTS.ballImageSize);
+                const side = Math.min(img.width, img.height);
+                const canvas = document.createElement('canvas');
+                canvas.width = size;
+                canvas.height = size;
+                canvas.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, size, size);
+                res(canvas.toDataURL('image/png'));
+            };
+            img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
 }
 
 // ───────────── 设置面板 ─────────────
@@ -529,6 +854,14 @@ function renderSettings() {
       <label>每条消息最多保留版本数<input type="number" id="rs_max" class="text_pole" min="2"></label>
       <label class="checkbox_label"><input type="checkbox" id="rs_ball_on"> 显示悬浮球</label>
       <label>悬浮球大小（像素）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="80"></label>
+      <div>悬浮球图片</div>
+      <div class="rs_ball_img_row">
+        <div class="menu_button" id="rs_ball_upload">上传图片</div>
+        <div class="menu_button" id="rs_ball_clear">恢复默认</div>
+        <input type="file" accept="image/*" id="rs_ball_file" hidden>
+      </div>
+      <input type="text" id="rs_ball_url" class="text_pole" placeholder="或者粘贴图片链接">
+      <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
     </div>
   </div>
 </div>`);
@@ -550,6 +883,35 @@ function renderSettings() {
         settings().ballSize = Math.min(80, Math.max(30, parseInt(this.value) || DEFAULTS.ballSize));
         ctx().saveSettingsDebounced();
         renderBall();
+    });
+    const setBallImage = v => {
+        settings().ballImage = v;
+        ctx().saveSettingsDebounced();
+        renderBall();
+    };
+    $('#rs_ball_url').val(String(s.ballImage).startsWith('data:') ? '' : s.ballImage).on('change', function () {
+        setBallImage(this.value.trim());
+    });
+    $('#rs_ball_upload').on('click', () => $('#rs_ball_file').trigger('click'));
+    $('#rs_ball_file').on('change', async function () {
+        const file = this.files?.[0];
+        this.value = '';
+        if (!file) return;
+        try {
+            setBallImage(await imageToDataUrl(file));
+            $('#rs_ball_url').val('');
+            toastr.success('悬浮球图片已更换');
+        } catch {
+            toastr.error('这张图片读取失败，换一张试试');
+        }
+    });
+    $('#rs_ball_clear').on('click', () => {
+        $('#rs_ball_url').val('');
+        setBallImage('');
+    });
+    $('#rs_snap_keep').val(s.snapKeep).on('input', function () {
+        settings().snapKeep = Math.max(2, parseInt(this.value) || DEFAULTS.snapKeep);
+        ctx().saveSettingsDebounced();
     });
 }
 

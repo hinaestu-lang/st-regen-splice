@@ -3,7 +3,7 @@
     display: none;
 }
 
-/* ───── 面板外框：手机上是底部弹出的大面板 ───── */
+/* ───── 面板外框：手机上从底部弹出 ───── */
 #rs_overlay {
     position: fixed;
     inset: 0;
@@ -15,12 +15,12 @@
 }
 
 #rs_panel {
-    --rs-card: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
     --rs-line: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
+    --rs-soft: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
     --rs-accent: var(--SmartThemeQuoteColor);
 
-    width: min(640px, 100vw);  /* 面板宽度 */
-    height: 92dvh;             /* 面板高度 */
+    width: min(720px, 100vw);   /* 面板宽度 */
+    height: 94dvh;              /* 面板高度 */
     display: flex;
     flex-direction: column;
     border-radius: 18px 18px 0 0;
@@ -30,248 +30,202 @@
     overflow: hidden;
 }
 
-@media (min-width: 700px) {
+@media (min-width: 760px) {
     #rs_overlay { align-items: center; }
-    #rs_panel { height: 86dvh; border-radius: 18px; }
+    #rs_panel { height: 88dvh; border-radius: 18px; }
 }
 
-/* ───── 顶栏 ───── */
-#rs_panel .rs_head {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+/* ───── 两个标题栏 ───── */
+#rs_panel .rs_bar {
+    flex: none;
+    display: flex;
     align-items: center;
-    padding: 14px 16px 10px;
+    gap: 14px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--rs-line);
 }
 
-#rs_panel .rs_title {
-    font-size: 14px;
-    opacity: 0.6;
-}
-
-#rs_panel .rs_close {
-    justify-self: end;
-    cursor: pointer;
-    padding: 6px;
-    font-size: 18px;
-    opacity: 0.6;
-}
-
-#rs_panel .rs_seg {
-    display: flex;
-    padding: 3px;
-    border-radius: 10px;
-    background: var(--rs-card);
-}
-
-#rs_panel .rs_seg_btn {
-    padding: 5px 18px;
-    border-radius: 8px;
-    font-size: 14px;
-    cursor: pointer;
-    opacity: 0.6;
-    white-space: nowrap;
-}
-
-#rs_panel .rs_seg_btn.rs_on {
-    opacity: 1;
-    font-weight: 600;
-    background: var(--SmartThemeBlurTintColor);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
-}
-
-/* ───── 内容区 ───── */
-#rs_panel .rs_body {
-    flex: 1;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    padding: 12px 14px 24px;
-}
-
-#rs_panel .rs_group + .rs_group {
-    margin-top: 18px;
-}
-
-#rs_panel .rs_group_head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 4px 10px;
-    cursor: pointer;
-}
-
-#rs_panel .rs_group_name {
+#rs_panel .rs_bar_title {
     flex: 1;
     font-size: 15px;
     font-weight: 600;
 }
 
-#rs_panel .rs_tag {
-    margin-left: 8px;
-    padding: 1px 7px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: normal;
-    color: var(--rs-accent);
-    border: 1px solid var(--rs-accent);
+#rs_panel .rs_ref {
+    width: auto;
+    max-width: 52%;
+    margin: 0;
+    font-size: 14px;
 }
 
-#rs_panel .rs_group_count {
-    font-size: 12px;
-    opacity: 0.5;
-}
-
-#rs_panel .rs_group_all {
-    font-size: 13px;
-    color: var(--rs-accent);
-}
-
-#rs_panel .rs_group_fold {
-    font-size: 12px;
-    opacity: 0.4;
-}
-
-/* 段落卡片 */
-#rs_panel .rs_card {
-    position: relative;
-    margin-bottom: 10px;          /* 卡片间距 */
-    padding: 14px 16px;           /* 卡片内边距 */
-    border-radius: 14px;          /* 卡片圆角 */
-    background: var(--rs-card);
-    border: 1.5px solid transparent;
+#rs_panel .rs_icon {
+    padding: 6px;
+    font-size: 17px;            /* 图标大小 */
     cursor: pointer;
-    transition: border-color 0.15s;
+    opacity: 0.75;
 }
 
-#rs_panel .rs_card.rs_sel {
+#rs_panel .rs_icon.rs_off {
+    opacity: 0.25;
+    pointer-events: none;
+}
+
+#rs_panel .rs_save {
+    margin: 0;
+    padding: 6px 18px;
+    border-radius: 10px;
+    color: var(--SmartThemeBlurTintColor);
+    background: var(--rs-accent);
     border-color: var(--rs-accent);
 }
 
-#rs_panel .rs_text {
-    font-size: 15px;              /* 正文字号 */
-    line-height: 1.8;             /* 正文行距 */
-    white-space: pre-wrap;
-    word-break: break-word;
+/* ───── 上半屏：参考版本 ───── */
+#rs_panel .rs_ref_pane {
+    flex: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px 18px;
+    font-size: 15px;            /* 参考区字号 */
+    line-height: 1.95;          /* 参考区行距 */
 }
 
-#rs_panel .rs_card:not(.rs_draft) .rs_text {
-    padding-right: 22px;          /* 给编号留位置 */
+#rs_panel .rs_ref_pane p {
+    margin: 0 0 12px;
 }
 
-#rs_panel .rs_badge {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    min-width: 22px;
+#rs_panel .rs_s {
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.15s;
+}
+
+#rs_panel .rs_s:active {
+    background: var(--rs-line);
+}
+
+/* 已经用过的句子 */
+#rs_panel .rs_s.rs_used {
+    color: var(--rs-accent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+}
+
+/* ───── 中间拖动条 ───── */
+#rs_panel .rs_grip {
+    flex: none;
     height: 22px;
-    padding: 0 6px;
-    border-radius: 11px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--SmartThemeBlurTintColor);
-    background: var(--rs-accent);
-}
-
-/* 成稿卡片 */
-#rs_panel .rs_draft {
-    cursor: default;
-}
-
-#rs_panel .rs_draft.rs_editing {
-    border-color: var(--rs-accent);
-}
-
-#rs_panel .rs_meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 6px;
-    font-size: 12px;
-    opacity: 0.5;
-}
-
-#rs_panel .rs_ops {
-    display: flex;
-    gap: 16px;
-}
-
-#rs_panel .rs_ops > div {
-    cursor: pointer;
-    padding: 2px;
-}
-
-#rs_panel .rs_tap_edit {
-    cursor: text;
-    min-height: 1.8em;
-}
-
-#rs_panel .rs_placeholder {
-    opacity: 0.4;
-}
-
-#rs_panel .rs_edit {
-    display: block;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    border: none;
-    outline: none;
-    resize: none;
-    overflow: hidden;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: 15px;
-    line-height: 1.8;
-}
-
-#rs_panel .rs_add_para {
-    padding: 12px;
-    text-align: center;
-    border-radius: 14px;
-    border: 1.5px dashed var(--rs-line);
-    font-size: 14px;
-    opacity: 0.7;
-    cursor: pointer;
-}
-
-#rs_panel .rs_empty {
-    padding: 40px 20px;
-    text-align: center;
-    font-size: 14px;
-    opacity: 0.5;
-    line-height: 1.8;
-}
-
-/* ───── 底栏 ───── */
-#rs_panel .rs_foot {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    cursor: row-resize;
+    touch-action: none;
+    background: var(--rs-soft);
     border-top: 1px solid var(--rs-line);
+    border-bottom: 1px solid var(--rs-line);
 }
 
-#rs_panel .rs_foot .menu_button {
-    flex: 1;
-    margin: 0;
-    padding: 10px;
-    border-radius: 12px;
-}
-
-#rs_panel .rs_foot_info {
-    flex: 1;
-    font-size: 14px;
+#rs_panel .rs_grip span {
+    width: 44px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rs-line);
+    box-shadow: 0 0 0 0.5px var(--SmartThemeBodyColor);
     opacity: 0.6;
 }
 
-#rs_panel .rs_primary {
-    color: var(--SmartThemeBlurTintColor);
-    background: var(--rs-accent);
-    border-color: var(--rs-accent);
+/* ───── 下半屏：正文 ───── */
+#rs_panel .rs_body_text {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    margin: 0;
+    padding: 12px 18px calc(16px + env(safe-area-inset-bottom));
+    border: none;
+    border-radius: 0;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 15px;            /* 正文字号 */
+    line-height: 1.95;          /* 正文行距 */
+}
+
+@keyframes rs_flash {
+    from { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 10%, transparent); }
+    to { background: transparent; }
+}
+
+#rs_panel .rs_body_text.rs_flash {
+    animation: rs_flash 0.5s ease-out; /* 插入后闪一下的时长 */
+}
+
+/* ───── 编辑对象选择（角色字段 / 世界书和条目） ───── */
+#rs_panel .rs_pickers {
+    flex: none;
+    display: flex;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_pickers select {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: 14px;
+}
+
+#rs_panel .rs_icon.rs_diff.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+/* 标出改动时：正文里已经没有的句子 */
+#rs_panel .rs_s.rs_gone {
+    text-decoration: line-through;
+    text-decoration-color: var(--rs-accent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 8%, transparent);
+}
+
+#rs_panel .rs_empty {
+    padding: 24px 6px;
+    font-size: 14px;
+    line-height: 1.8;
+    opacity: 0.5;
+}
+
+/* ───── 悬浮球菜单 ───── */
+#rs_menu {
+    position: fixed;
+    z-index: 9999;
+    min-width: 132px;
+    padding: 6px;
+    border-radius: 14px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    color: var(--SmartThemeBodyColor);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+#rs_menu .rs_menu_item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+#rs_menu .rs_menu_item i {
+    width: 18px;
+    text-align: center;
+    color: var(--SmartThemeQuoteColor);
+}
+
+#rs_menu .rs_menu_item:active {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
 }
 
 /* 悬浮球 */
@@ -296,4 +250,22 @@
 
 #rs_ball:active {
     opacity: 1;
+}
+
+/* 自定义图片的悬浮球 */
+#rs_ball.rs_ball_img {
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.rs_ball_img_row {
+    display: flex;
+    gap: 6px;
+    margin: 4px 0;
+}
+
+.rs_ball_img_row .menu_button {
+    flex: 1;
+    margin: 0;
 }
