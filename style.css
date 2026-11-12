@@ -164,34 +164,85 @@
     color: var(--rs-accent);
 }
 
-#rs_panel .rs_icon.rs_nav_btn.rs_on,
 #rs_panel .rs_icon.rs_find_btn.rs_on {
     opacity: 1;
     color: var(--rs-accent);
 }
 
-/* 目录 */
-#rs_panel .rs_nav_box {
+/* 素材库 */
+#rs_panel .rs_icon.rs_lib_btn.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+#rs_panel .rs_lib_box {
     display: none;
     flex: none;
-    max-height: 35%;            /* 目录最多占面板多高，超出可以滑动 */
-    overflow-y: auto;
-    padding: 6px 12px;
+    padding: 8px 16px 6px;
     border-bottom: 1px solid var(--rs-line);
 }
 
-#rs_panel .rs_nav_item {
-    padding: 7px 4px;
-    border-radius: 8px;
-    font-size: 14px;
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+#rs_panel .rs_lib_head {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
 }
 
-#rs_panel .rs_nav_item:active {
-    background: var(--rs-line);
+#rs_panel .rs_lib_head input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--rs-line) !important;
+    background: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    font-size: 14px;
+}
+
+#rs_panel .rs_lib_head .menu_button {
+    flex: none;
+    margin: 0;
+    padding: 5px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+#rs_panel .rs_lib_list {
+    max-height: 32dvh;          /* 素材列表最多占多高，超出可以滑动 */
+    overflow-y: auto;
+}
+
+#rs_panel .rs_lib_item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_lib_main {
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+}
+
+#rs_panel .rs_lib_main:active {
+    opacity: 0.6;
+}
+
+#rs_panel .rs_lib_text {
+    font-size: 14px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#rs_panel .rs_lib_meta {
+    margin-top: 2px;
+    font-size: 11px;
+    opacity: 0.5;
 }
 
 /* 查找替换 */
@@ -376,7 +427,6 @@
 
 /* 两层的排版必须完全一样，高亮才对得上 */
 #rs_panel .rs_body_back,
-#rs_panel .rs_body_measure,
 #rs_panel .rs_body_text {
     position: absolute !important;
     inset: 0;
@@ -401,14 +451,6 @@
 #rs_panel .rs_body_back {
     z-index: 0;
     color: transparent;
-    overflow-y: hidden !important;
-    pointer-events: none;
-}
-
-/* 量位置用的隐形层 */
-#rs_panel .rs_body_measure {
-    z-index: -1;
-    visibility: hidden;
     overflow-y: hidden !important;
     pointer-events: none;
 }
@@ -523,4 +565,265 @@
 .rs_ball_img_row .menu_button {
     flex: 1;
     margin: 0;
+}
+
+/* ───── 点句子选中 + 工具栏 ───── */
+#rs_panel .rs_s {
+    -webkit-touch-callout: none;
+}
+
+#rs_panel .rs_s.rs_sel {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 28%, transparent); /* 选中句子的底色 */
+    border-radius: 3px;
+}
+
+#rs_panel .rs_tb {
+    position: sticky;
+    bottom: 10px;               /* 离区域底部的距离 */
+    z-index: 5;
+    display: flex;
+    width: fit-content;
+    margin: 6px auto 0;
+    padding: 4px;
+    border-radius: 10px;
+    background: rgba(30, 30, 30, 0.92);  /* 工具栏底色 */
+    border: 1px solid rgba(255, 255, 255, 0.18); /* 深色背景下也看得清边 */
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+    text-indent: 0;
+    font-style: normal;
+    letter-spacing: normal;
+}
+
+#rs_panel .rs_tb_btn {
+    padding: 7px 14px;
+    border-radius: 7px;
+    color: #fff;
+    font-size: 14px;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+#rs_panel .rs_tb_btn:active {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* 正文里的插入位置标记：没在打字时才显示，打字时用系统光标 */
+#rs_panel .rs_caret {
+    display: inline-block;
+    width: 0;
+    height: 1.3em;
+    margin-right: -2px;
+    vertical-align: text-bottom;
+    border-left: 2px solid var(--SmartThemeQuoteColor);
+    animation: rs_blink 1.1s steps(1) infinite;
+}
+
+#rs_panel .rs_body_wrap.rs_focus .rs_caret {
+    display: none;
+}
+
+@keyframes rs_blink {
+    50% { opacity: 0; }
+}
+
+/* ───── 阅读页 ───── */
+#rs_panel .rs_reader {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+}
+
+#rs_panel.rs_mode_reader > :not(.rs_top):not(.rs_reader) {
+    display: none !important;
+}
+
+#rs_panel.rs_mode_reader .rs_reader {
+    display: flex;
+}
+
+#rs_panel .rs_rd_bar .rs_rd_theme {
+    width: auto;
+    font-size: 14px;
+}
+
+#rs_panel .rs_rd_bar .rs_bar_title {
+    font-size: 13px;
+    font-weight: normal;
+    opacity: 0.55;
+}
+
+#rs_panel .rs_rd_font {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+#rs_panel .rs_icon.rs_rd_find_btn.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+#rs_panel .rs_rd_find {
+    display: none;
+    flex: none;
+    padding: 8px 16px 2px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+/* 阅读正文 */
+#rs_panel .rs_reader_body {
+    --rd-bg: #f5f4ee;           /* 米白：底色 */
+    --rd-text: #262626;         /* 正文 */
+    --rd-quote: #4f7d4a;        /* 对话 */
+    --rd-italic: #5a5a5a;       /* 斜体 */
+    --rd-muted: #9b9a92;        /* 楼层号、时间 */
+
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 18px 22px calc(40px + env(safe-area-inset-bottom));
+    background: var(--rd-bg);
+    color: var(--rd-text);
+    font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+    line-height: 1.95;          /* 阅读行距 */
+    letter-spacing: 0.04em;
+}
+
+#rs_panel .rs_reader_body.rs_rd_sage {
+    --rd-bg: #d4ddd0;
+    --rd-text: #1f2d3b;
+    --rd-quote: #477443;
+    --rd-italic: #4b5a55;
+    --rd-muted: #7b8a80;
+}
+
+#rs_panel .rs_reader_body.rs_rd_dark {
+    --rd-bg: #1c1b21;
+    --rd-text: #ebe5d6;
+    --rd-quote: #c9a24f;
+    --rd-italic: #b9b3a5;
+    --rd-muted: #77756e;
+}
+
+#rs_panel .rs_reader_body.rs_rd_navy {
+    --rd-bg: #232f78;
+    --rd-text: #eef0fb;
+    --rd-quote: #ffffff;
+    --rd-italic: #a9b3e6;
+    --rd-muted: #7f8ac6;
+}
+
+#rs_panel .rs_reader_body.rs_rd_follow {
+    --rd-bg: transparent;
+    --rd-text: var(--SmartThemeBodyColor);
+    --rd-quote: var(--SmartThemeQuoteColor);
+    --rd-italic: var(--SmartThemeEmColor, var(--SmartThemeBodyColor));
+    --rd-muted: color-mix(in srgb, var(--SmartThemeBodyColor) 55%, transparent);
+}
+
+#rs_panel .rs_rd_more {
+    margin: 0 auto 22px;
+    padding: 8px 14px;
+    width: fit-content;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--rd-muted) 60%, transparent);
+    color: var(--rd-muted);
+    font-size: 13px;
+    font-family: sans-serif;
+    letter-spacing: normal;
+    cursor: pointer;
+}
+
+#rs_panel .rs_floor {
+    margin-bottom: 2.6em;       /* 楼与楼之间的距离 */
+}
+
+#rs_panel .rs_floor_hidden {
+    opacity: 0.62;              /* 已隐藏楼层的淡化程度 */
+}
+
+#rs_panel .rs_floor_head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 1.1em;
+}
+
+#rs_panel .rs_floor_av {
+    width: 42px;
+    height: 42px;
+    flex: none;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+#rs_panel .rs_floor_av_none[hidden] {
+    display: none;
+}
+
+#rs_panel .rs_floor_av_none {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--rd-text) 12%, transparent);
+    font-weight: 700;
+}
+
+#rs_panel .rs_floor_name {
+    font-size: 1em;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+#rs_panel .rs_floor_tag {
+    margin-left: 8px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: 1px solid var(--rd-muted);
+    color: var(--rd-muted);
+    font-size: 0.65em;
+    font-weight: normal;
+    vertical-align: middle;
+}
+
+#rs_panel .rs_floor_meta {
+    font-size: 0.72em;
+    color: var(--rd-muted);
+    line-height: 1.4;
+}
+
+#rs_panel .rs_floor p {
+    margin: 0 0 0.9em;
+    text-indent: 2em;           /* 段首缩进 */
+    font-weight: 500;
+}
+
+#rs_panel .rs_floor_empty {
+    color: var(--rd-muted);
+    text-indent: 0 !important;
+}
+
+#rs_panel .rs_rq {
+    color: var(--rd-quote);
+}
+
+#rs_panel .rs_ri {
+    color: var(--rd-italic);
+    font-style: italic;
+}
+
+#rs_panel .rs_reader_body .rs_s.rs_sel {
+    background: color-mix(in srgb, var(--rd-quote) 22%, transparent);
+}
+
+#rs_panel .rs_rhit {
+    background: rgba(255, 196, 0, 0.45);   /* 查找结果 */
+    border-radius: 2px;
+}
+
+#rs_panel .rs_rhit.rs_rhit_cur {
+    outline: 2px solid rgba(255, 150, 0, 0.9);
 }

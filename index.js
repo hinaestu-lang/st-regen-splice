@@ -18,6 +18,10 @@ const DEFAULTS = {
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
     lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
     findExclude: '',   // 查找替换时跳过的标签名，空格隔开，比如 count think
+    readerTheme: 'paper', // 阅读页配色：paper 米白 / sage 青绿 / dark 夜黑 / navy 藏蓝 / follow 跟随酒馆主题
+    readerFont: 17,    // 阅读页字号（像素）
+    readerHide: 'think thinking', // 阅读页里整块不显示的标签，空格隔开；其他标签只去掉 <> 符号、保留里面的字
+    libMax: 500,       // 素材库最多存多少条，超出删掉最旧的
     clicheOn: true,    // 楼层编辑时是否标出八股词
     clicheWhole: true, // true = 把带八股词的整句标出来；false = 只标那几个字
     // 八股词表：一行一个；用 /.../ 包起来的是正则，可以匹配变体
@@ -182,18 +186,28 @@ function sentenceSet(text) {
     return set;
 }
 
-// 正文里新增或改过的句子，包成 <mark>
-function markAdded(text, refSet) {
-    let count = 0;
-    const html = String(text).split('\n').map(line => {
-        if (!line.trim()) return escapeHtml(line);
-        return splitSentences(line).map(x => {
-            if (!x.trim() || refSet.has(x.trim())) return escapeHtml(x);
-            count++;
-            return `<mark class="rs_add">${escapeHtml(x)}</mark>`;
-        }).join('');
-    }).join('\n');
-    return { html, count };
+// 逐句走一遍，给出每句的 [开始, 结束]
+function eachSentence(text, fn) {
+    let off = 0;
+    String(text).split('\n').forEach(line => {
+        let pos = off;
+        if (line) {
+            splitSentences(line).forEach(sen => {
+                fn(sen, pos, pos + sen.length);
+                pos += sen.length;
+            });
+        }
+        off += line.length + 1;
+    });
+}
+
+// 正文里新增或改过的句子的范围
+function addedRanges(text, refSet) {
+    const out = [];
+    eachSentence(text, (sen, a, b) => {
+        if (sen.trim() && !refSet.has(sen.trim())) out.push([a, b]);
+    });
+    return out;
 }
 
 // ───── 存档（存在浏览器本地 IndexedDB，不占酒馆设置文件） ─────
@@ -239,6 +253,8 @@ async function idbPut(key, value) {
 }
 
 const getSnaps = key => idbGet(key);
+const getLib = () => idbGet('library');
+const putLib = arr => idbPut('library', arr);
 const getVers = key => idbGet('ver:' + key);
 const putVers = (key, arr) => idbPut('ver:' + key, arr);
 
@@ -554,23 +570,13 @@ function clicheRanges(text) {
     if (!settings().clicheWhole || !words.length) return words;
 
     const out = [];
-    let off = 0;
-    text.split('\n').forEach(line => {
-        let pos = off;
-        if (line) {
-            splitSentences(line).forEach(sen => {
-                const a = pos;
-                const b = pos + sen.length;
-                pos = b;
-                if (words.some(([x, y]) => x < b && y > a)) out.push([a, b]);
-            });
-        }
-        off += line.length + 1;
+    eachSentence(text, (sen, a, b) => {
+        if (words.some(([x, y]) => x < b && y > a)) out.push([a, b]);
     });
     return out;
 }
 
-// 把 [[开始, 结束], ...] 范围包成 <mark>
+// 把 [[开始, 结束], ...] 范围包成 <mark>（参考区的八股高亮用）
 function markRanges(text, ranges, cls) {
     let html = '';
     let last = 0;
@@ -609,18 +615,41 @@ function renderBack() {
     if (find) updateFindInfo(find.length);
 
     // 高亮层同一时间只画一种：查找 > 八股 > 改动对比
-    let html = '';
+    let ranges = [];
+    let cls = '';
     if (find?.length) {
-        html = markRanges(text, find, 'rs_find');
+        [ranges, cls] = [find, 'rs_find'];
     } else if (cliche) {
-        html = markRanges(text, cliche, 'rs_mark');
+        [ranges, cls] = [cliche, 'rs_mark'];
     } else if (!isMsg && state.diff) {
         const refText = state.target.refs[state.ref]?.text ?? '';
-        if (refText.trim()) html = markAdded(text, sentenceSet(refText)).html;
+        if (refText.trim()) [ranges, cls] = [addedRanges(text, sentenceSet(refText)), 'rs_add'];
     }
+    const caret = state.caret ? Math.min(state.caret.s, text.length) : text.length;
     // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
-    $back.html(html ? html + (text.endsWith('\n') ? '\u200b' : '') : '');
+    $back.html(backHtml(text, ranges, cls, caret) + (text.endsWith('\n') ? '\u200b' : ''));
     syncBackScroll();
+}
+
+// 高亮层的 HTML：按范围包 <mark>，并在插入位置放一条竖线
+const CARET_HTML = '<span class="rs_caret"></span>';
+function backHtml(text, ranges, cls, caret) {
+    let html = '';
+    let done = false;
+    const piece = (a, b) => {
+        if (!done && caret >= a && caret <= b) {
+            done = true;
+            return escapeHtml(text.slice(a, caret)) + CARET_HTML + escapeHtml(text.slice(caret, b));
+        }
+        return escapeHtml(text.slice(a, b));
+    };
+    let last = 0;
+    ranges.forEach(([a, b]) => {
+        html += piece(last, a) + `<mark class="${cls}">${piece(a, b)}</mark>`;
+        last = b;
+    });
+    html += piece(last, text.length);
+    return html;
 }
 
 // ───── 查找替换 ─────
@@ -669,7 +698,7 @@ function findRanges(text) {
 }
 
 function updateFindInfo(count) {
-    $('#rs_panel .rs_find_info').text(findQuery() ? `${count} 处` : '');
+    $('#rs_panel .rs_find_box .rs_find_info').text(findQuery() ? `${count} 处` : '');
 }
 
 // 选中第 i 个命中并滚到那里（高亮层里同一时间只有一种 mark，顺序一致）
@@ -753,8 +782,12 @@ function replaceAll() {
     toastr.success(`已替换 ${hits.length} 处，可以撤销`);
 }
 
-// 查找、八股词表、目录三个框同一时间只开一个，省地方
-const BOXES = { find: ['.rs_find_box', '.rs_find_btn'], cliche: ['.rs_cliche_box', '.rs_cliche_set'], nav: ['.rs_nav_box', '.rs_nav_btn'] };
+// 查找、八股词表、素材库同一时间只开一个，省地方
+const BOXES = {
+    find: ['.rs_find_box', '.rs_find_btn'],
+    cliche: ['.rs_cliche_box', '.rs_cliche_set'],
+    lib: ['.rs_lib_box', '.rs_lib_btn'],
+};
 const boxOpen = which => $(`#rs_panel ${BOXES[which][0]}`).is(':visible');
 
 function toggleBox(which) {
@@ -765,49 +798,471 @@ function toggleBox(which) {
         $(`#rs_panel ${btn}`).toggleClass('rs_on', on);
     }
     if (which === 'find' && willOpen) $('#rs_panel .rs_find_q').trigger('focus');
-    if (which === 'nav' && willOpen) renderNav();
+    if (which === 'lib' && willOpen) renderLib();
     renderBack();
 }
 
-// ───── 目录 ─────
-// 认这几种标题行：# 标题、单独一行的 <标签>、单独一行的【标题】
+// ───── 素材库 ─────
+// 参考区选中句子点「收藏」、或在正文里选中文字点「收藏选中」，都会存进来；点素材插到插入位置
 
-function headings(text) {
-    const out = [];
-    let off = 0;
-    String(text).split('\n').forEach(line => {
+// 素材来源，比如「楼层 第 16 楼 版本 2」；where 不传就用参考区当前选的版本
+function sourceLabel(where) {
+    const t = state.target;
+    if (!t) return '';
+    const kind = { msg: '楼层', char: '角色卡', persona: '人设', world: '世界书' }[t.kind] || '';
+    return [kind, t.subtitle?.replace(/<[^>]+>/g, ''), where ?? t.refs?.[state.ref]?.label].filter(Boolean).join(' ');
+}
+
+async function collect(text, from) {
+    text = String(text).trim();
+    if (!text) {
+        toastr.warning('没有可收藏的文字');
+        return;
+    }
+    let lib = await getLib();
+    if (lib.some(x => x.text === text)) {
+        toastr.info('素材库里已经有这句了');
+        return;
+    }
+    lib.unshift({ id: `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text, from, time: Date.now() });
+    const max = Math.max(10, parseInt(settings().libMax) || DEFAULTS.libMax);
+    if (lib.length > max) lib = lib.slice(0, max);
+    await putLib(lib);
+    toastr.success('已收进素材库');
+    if (boxOpen('lib')) renderLib();
+}
+
+async function renderLib() {
+    const q = String($('#rs_panel .rs_lib_q').val() ?? '').trim();
+    const lib = (await getLib()).filter(x => !q || x.text.includes(q));
+    $('#rs_panel .rs_lib_list').html(lib.length
+        ? lib.map(x => `
+<div class="rs_lib_item" data-id="${x.id}">
+  <div class="rs_lib_main">
+    <div class="rs_lib_text">${escapeHtml(x.text)}</div>
+    <div class="rs_lib_meta">${escapeHtml(x.from || '')} ${fmtTime(x.time)}</div>
+  </div>
+  <div class="rs_icon rs_lib_del fa-solid fa-xmark" title="删除"></div>
+</div>`).join('')
+        : `<div class="rs_empty">${q ? '没有找到' : '还没有素材。在参考区点选句子后点「收藏」，或者在正文里选中文字后点「收藏选中」。'}</div>`);
+}
+
+async function useLibItem(id) {
+    const item = (await getLib()).find(x => x.id === id);
+    if (item) insertSentence(item.text);
+}
+
+async function deleteLibItem(id) {
+    await putLib((await getLib()).filter(x => x.id !== id));
+    renderLib();
+}
+
+function collectSelection() {
+    const ta = bodyEl();
+    const sel = state.caret && state.caret.e > state.caret.s ? ta.value.slice(state.caret.s, state.caret.e) : '';
+    if (!sel.trim()) {
+        toastr.info('先在正文里选中一段文字');
+        return;
+    }
+    collect(sel, sourceLabel('正文'));
+}
+
+// ───── 点句子选中 + 工具栏（参考区、阅读页共用） ─────
+// 点一句选中；接着点相邻的句子连成一段；点已选中的头尾句子就缩短；点别处取消
+
+let sel = null; // { box: 容器元素, g: 段落, a: 起, b: 止 }
+
+function selSpans() {
+    if (!sel) return $();
+    return $(sel.box).find(`.rs_s[data-g="${sel.g}"]`).filter(function () {
+        const i = Number(this.dataset.i);
+        return i >= sel.a && i <= sel.b;
+    });
+}
+
+function clearSel() {
+    if (!sel) return;
+    $(sel.box).find('.rs_s.rs_sel').removeClass('rs_sel');
+    $(sel.box).find('.rs_tb').remove();
+    sel = null;
+}
+
+function onSentenceTap(el) {
+    const box = el.closest('.rs_ref_pane, .rs_reader_body');
+    const g = el.dataset.g;
+    const i = Number(el.dataset.i);
+    if (!sel || sel.box !== box || sel.g !== g || i < sel.a - 1 || i > sel.b + 1) {
+        clearSel();
+        sel = { box, g, a: i, b: i };
+    } else if (i === sel.a - 1) {
+        sel.a = i;
+    } else if (i === sel.b + 1) {
+        sel.b = i;
+    } else if (sel.a === sel.b) {
+        clearSel();
+        return;
+    } else if (i === sel.a) {
+        sel.a++;
+    } else if (i === sel.b) {
+        sel.b--;
+    } else {
+        sel.a = sel.b = i;
+    }
+    $(box).find('.rs_s.rs_sel').removeClass('rs_sel');
+    selSpans().addClass('rs_sel');
+    placeToolbar();
+}
+
+// 工具栏贴在当前区域底部，不跟着句子跑，就不会挡住要点的下一句
+function placeToolbar() {
+    const $box = $(sel.box);
+    $box.find('.rs_tb').remove();
+    const isReader = $box.hasClass('rs_reader_body');
+    const btns = isReader
+        ? [['fav', '收藏'], ['copy', '复制'], ['edit', '编辑这楼']]
+        : [['ins', '插入'], ['fav', '收藏'], ['copy', '复制']];
+    $box.append(`<div class="rs_tb">${btns.map(([k, t]) => `<div class="rs_tb_btn" data-act="${k}">${t}</div>`).join('')}</div>`);
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+    }
+    toastr.success('已复制');
+}
+
+function onToolbarAct(act) {
+    const spans = selSpans();
+    const text = spans.map((_, e) => e.textContent).get().join('');
+    const isReader = $(sel.box).hasClass('rs_reader_body');
+    const floor = isReader ? Number(spans.first().closest('.rs_floor').data('id')) : null;
+    if (act === 'ins') {
+        spans.each((_, e) => state.used.add(e.dataset.k));
+        clearSel();
+        insertSentence(text);
+        return;
+    }
+    if (act === 'fav') collect(text, isReader ? `阅读 第 ${floor} 楼` : sourceLabel());
+    if (act === 'copy') copyText(text);
+    clearSel();
+    if (act === 'edit') switchTarget(async () => msgTarget(floor));
+}
+
+// ───── 阅读页 ─────
+// 整个聊天像小说一样连着排，已隐藏的楼层也显示；可以选句收藏、复制、跳去编辑；可以查找替换
+
+const READER_CHUNK = 30; // 一次加载多少楼，点「加载更早」再往前加
+const reader = { from: 0, hits: [], cur: -1, undo: [] };
+
+const readerHideNames = () => String(settings().readerHide || '').split(/[\s,，、]+/).map(x => x.replace(/[<>/]/g, '')).filter(x => /^[\w-]+$/.test(x));
+
+// 把原文转成显示用的文字：去掉要隐藏的标签整块、其他标签的 <> 记号、* 号（* 号之间的字显示成斜体）
+// 返回 { text, map, it, shown }：map[i] 是显示文字第 i 个字在原文里的位置，shown[j] 表示原文第 j 个字有没有显示
+function readerDisplay(raw) {
+    raw = String(raw ?? '');
+    const gone = new Uint8Array(raw.length);
+    const cut = re => {
         let m;
-        if ((m = line.match(/^\s*(#{1,6})\s+(.+)/))) out.push({ pos: off, level: m[1].length, label: m[2].trim() });
-        else if ((m = line.match(/^\s*<([A-Za-z_][\w-]*)[^>/]*>\s*$/))) out.push({ pos: off, level: 1, label: `<${m[1]}>` });
-        else if ((m = line.match(/^\s*(【[^】]+】)\s*$/))) out.push({ pos: off, level: 1, label: m[1] });
+        while ((m = re.exec(raw))) {
+            if (!m[0]) {
+                re.lastIndex++;
+                continue;
+            }
+            gone.fill(1, m.index, m.index + m[0].length);
+        }
+    };
+    readerHideNames().forEach(n => {
+        const e = escapeRe(n);
+        cut(new RegExp(`<${e}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${e}\\s*>|$)`, 'gi'));
+    });
+    cut(/<\/?[A-Za-z_][\w-]*(?:\s[^>]*)?\/?>/g);
+
+    let text = '';
+    const map = [];
+    const it = [];
+    const shown = new Uint8Array(raw.length);
+    let italic = false;
+    for (let j = 0; j < raw.length; j++) {
+        if (gone[j]) continue;
+        if (raw[j] === '*') {
+            italic = !italic;
+            continue;
+        }
+        if (raw[j] === '\n') italic = false;
+        text += raw[j];
+        map.push(j);
+        it.push(italic);
+        shown[j] = 1;
+    }
+    return { text, map, it, shown };
+}
+
+function floorAvatar(m) {
+    if (m.force_avatar) return m.force_avatar;
+    const ch = !m.is_user && currentChar();
+    return ch?.avatar ? `/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}` : '';
+}
+
+function floorTime(m) {
+    const t = m.send_date;
+    if (!t) return '';
+    return typeof t === 'number' ? fmtTime(t) : String(t);
+}
+
+const QUOTE_OPEN = '“「『"';
+const QUOTE_CLOSE = '”」』"';
+
+// 一楼的 HTML：头像、名字、楼层号，正文按段落和句子排；对话染色、*斜体*、查找结果高亮
+function floorHtml(id) {
+    const m = ctx().chat[id];
+    if (!m) return '';
+    const d = readerDisplay(m.mes);
+    // 这一楼里的查找结果，换算成显示文字的位置
+    const hitAt = new Int32Array(d.text.length).fill(-1);
+    reader.hits.forEach((h, hi) => {
+        if (h.id !== id) return;
+        d.map.forEach((rawPos, i) => {
+            if (rawPos >= h.a && rawPos < h.b) hitAt[i] = hi;
+        });
+    });
+
+    let body = '';
+    let off = 0;
+    d.text.split('\n').forEach((line, pi) => {
+        if (line.trim()) {
+            let inQuote = false;
+            let pos = off;
+            const spans = splitSentences(line).map((sen, si) => {
+                let html = '';
+                let runKey = null;
+                let run = '';
+                const flush = () => {
+                    if (!run) return;
+                    const [q, i, h] = runKey.split('|');
+                    const cls = [q === '1' && 'rs_rq', i === '1' && 'rs_ri', h !== '-1' && 'rs_rhit'].filter(Boolean).join(' ');
+                    html += cls ? `<span class="${cls}"${h !== '-1' ? ` data-h="${h}"` : ''}>${escapeHtml(run)}</span>` : escapeHtml(run);
+                    run = '';
+                };
+                for (let k = 0; k < sen.length; k++) {
+                    const ch = sen[k];
+                    const idx = pos + k;
+                    // 引号本身也算对话；英文 " 不分开合，第一个开、第二个合
+                    let q = inQuote;
+                    if (!inQuote && QUOTE_OPEN.includes(ch)) inQuote = q = true;
+                    else if (inQuote && QUOTE_CLOSE.includes(ch)) inQuote = false;
+                    const key = `${q ? 1 : 0}|${d.it[idx] ? 1 : 0}|${hitAt[idx]}`;
+                    if (key !== runKey) {
+                        flush();
+                        runKey = key;
+                    }
+                    run += ch;
+                }
+                flush();
+                pos += sen.length;
+                return `<span class="rs_s" data-g="${id}-${pi}" data-i="${si}">${html}</span>`;
+            }).join('');
+            body += `<p>${spans}</p>`;
+        }
         off += line.length + 1;
     });
-    return out;
+
+    const av = floorAvatar(m);
+    const head = `
+<div class="rs_floor_head">
+  ${av ? `<img class="rs_floor_av" src="${escapeHtml(av)}" alt="" loading="lazy" data-ch="${escapeHtml((m.name || '?').slice(0, 1))}">` : ''}
+  <div class="rs_floor_av rs_floor_av_none"${av ? ' hidden' : ''}>${escapeHtml((m.name || '?').slice(0, 1))}</div>
+  <div class="rs_floor_who">
+    <div class="rs_floor_name">${escapeHtml(m.name || '')}${m.is_system ? '<span class="rs_floor_tag">已隐藏</span>' : ''}</div>
+    <div class="rs_floor_meta">第 ${id} 楼　${escapeHtml(floorTime(m))}</div>
+  </div>
+</div>`;
+    return `<section class="rs_floor ${m.is_system ? 'rs_floor_hidden' : ''}" data-id="${id}">${head}${body || '<p class="rs_floor_empty">（这一楼没有可显示的文字）</p>'}</section>`;
 }
 
-function renderNav() {
-    const list = headings(bodyEl().value);
-    $('#rs_panel .rs_nav_box').html(list.length
-        ? list.map(h => `<div class="rs_nav_item" data-pos="${h.pos}" style="padding-left:${(h.level - 1) * 14 + 4}px">${escapeHtml(h.label)}</div>`).join('')
-        : '<div class="rs_empty">没有标题。以 # 开头的行、单独一行的 &lt;标签&gt; 或【标题】会出现在这里。</div>');
+function applyReaderStyle() {
+    const s = settings();
+    const $b = $('#rs_panel .rs_reader_body');
+    $b.removeClass('rs_rd_paper rs_rd_sage rs_rd_dark rs_rd_navy rs_rd_follow').addClass(`rs_rd_${s.readerTheme}`);
+    $b.css('font-size', Math.min(26, Math.max(13, parseInt(s.readerFont) || DEFAULTS.readerFont)) + 'px');
+    $('#rs_panel .rs_rd_theme').val(s.readerTheme);
 }
 
-// 算出正文里某个位置离顶部多少像素（用一层看不见的同排版文字来量）
-function measureTop(pos) {
-    const m = $('#rs_panel .rs_body_measure')[0];
-    m.innerHTML = escapeHtml(bodyEl().value.slice(0, pos)) + '<span>\u200b</span>';
-    const top = m.lastChild.offsetTop;
-    m.innerHTML = '';
-    return top;
+function renderReader() {
+    const chat = ctx().chat;
+    let html = reader.from > 0 ? `<div class="rs_rd_more">加载更早的 ${Math.min(READER_CHUNK, reader.from)} 楼（前面还有 ${reader.from} 楼）</div>` : '';
+    for (let id = reader.from; id < chat.length; id++) html += floorHtml(id);
+    clearSel();
+    $('#rs_panel .rs_reader_body').html(html).find('img.rs_floor_av').on('error', function () {
+        $(this).next('.rs_floor_av_none').prop('hidden', false);
+        $(this).remove();
+    });
+    $('#rs_panel .rs_rd_bar .rs_bar_title').text(`共 ${chat.length} 楼`);
 }
 
-function jumpToHeading(pos) {
-    const ta = bodyEl();
-    ta.scrollTop = Math.max(0, measureTop(pos) - 6);
-    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
-    state.caret = { s: pos, e: pos };
-    syncBackScroll();
-    toggleBox('nav'); // 跳过去后收起目录，正文多露出来
+function openReader() {
+    const chat = ctx().chat;
+    reader.from = Math.max(0, chat.length - READER_CHUNK);
+    reader.hits = [];
+    reader.cur = -1;
+    reader.undo = [];
+    $('#rs_panel .rs_rd_ex').val(settings().findExclude);
+    applyReaderStyle();
+    if (boxOpenReaderFind()) readerSearch();
+    renderReader();
+    const body = $('#rs_panel .rs_reader_body')[0];
+    body.scrollTop = body.scrollHeight; // 停在最新一楼
+}
+
+function loadEarlier() {
+    const body = $('#rs_panel .rs_reader_body')[0];
+    const before = body.scrollHeight - body.scrollTop;
+    reader.from = Math.max(0, reader.from - READER_CHUNK);
+    renderReader();
+    body.scrollTop = body.scrollHeight - before; // 保持在原来看的位置
+}
+
+// 确保第 id 楼已经加载，然后滚过去
+function scrollToFloor(id, hitIndex) {
+    if (id < reader.from) {
+        reader.from = Math.max(0, id - 3);
+        renderReader();
+    }
+    const body = $('#rs_panel .rs_reader_body')[0];
+    const target = hitIndex !== undefined
+        ? body.querySelector(`.rs_rhit[data-h="${hitIndex}"]`)
+        : body.querySelector(`.rs_floor[data-id="${id}"]`);
+    if (!target) return;
+    const top = target.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+    body.scrollTop = Math.max(0, top - (hitIndex !== undefined ? body.clientHeight / 3 : 8));
+}
+
+async function jumpToFloor() {
+    const n = await askInput(`跳到第几楼？（0 到 ${ctx().chat.length - 1}）`, '');
+    if (n === null || n === undefined || n === false || String(n).trim() === '') return;
+    const id = parseInt(n);
+    if (!Number.isInteger(id) || id < 0 || id >= ctx().chat.length) {
+        toastr.warning('没有这一楼');
+        return;
+    }
+    scrollToFloor(id);
+}
+
+// ── 阅读页的查找替换：在原文里找，跳过排除的标签，也跳过没显示出来的部分（比如标签名本身） ──
+
+const boxOpenReaderFind = () => $('#rs_panel .rs_rd_find').is(':visible');
+const rdQuery = () => String($('#rs_panel .rs_rd_q').val() ?? '');
+
+function readerSearch() {
+    const q = rdQuery();
+    reader.hits = [];
+    reader.cur = -1;
+    if (q) {
+        ctx().chat.forEach((m, id) => {
+            const raw = String(m.mes ?? '');
+            const skip = excludedSpans(raw);
+            const { shown } = readerDisplay(raw);
+            let i = raw.indexOf(q);
+            while (i >= 0) {
+                const end = i + q.length;
+                const visible = shown.subarray(i, end).every(x => x);
+                if (visible && !skip.some(([a, b]) => i < b && end > a)) reader.hits.push({ id, a: i, b: end });
+                i = raw.indexOf(q, end);
+            }
+        });
+    }
+    const floors = new Set(reader.hits.map(h => h.id)).size;
+    $('#rs_panel .rs_rd_info').text(q ? `${reader.hits.length} 处${floors ? `，${floors} 楼` : ''}` : '');
+}
+
+function showHit(i) {
+    reader.cur = i;
+    const h = reader.hits[i];
+    scrollToFloor(h.id, i);
+    $('#rs_panel .rs_rhit_cur').removeClass('rs_rhit_cur');
+    $(`#rs_panel .rs_rhit[data-h="${i}"]`).addClass('rs_rhit_cur');
+}
+
+function readerNext() {
+    if (!reader.hits.length) {
+        toastr.info('没有找到');
+        return;
+    }
+    showHit((reader.cur + 1) % reader.hits.length);
+}
+
+// 改一楼的原文（当前显示的那个版本）
+function setFloorText(id, text) {
+    const c = ctx();
+    const m = c.chat[id];
+    m.mes = text;
+    if (Array.isArray(m.swipes) && m.swipes.length) m.swipes[m.swipe_id ?? 0] = text;
+    c.updateMessageBlock(id, m);
+}
+
+async function readerReplace(all) {
+    if (!reader.hits.length) {
+        toastr.info('没有找到');
+        return;
+    }
+    const rep = String($('#rs_panel .rs_rd_r').val() ?? '');
+    const chat = ctx().chat;
+    let targets;
+    if (all) {
+        const floors = new Set(reader.hits.map(h => h.id)).size;
+        if (!(await askConfirm(`要在 ${floors} 楼里替换 ${reader.hits.length} 处吗？可以用「撤销替换」恢复`))) return;
+        targets = reader.hits;
+    } else {
+        if (reader.cur < 0) {
+            readerNext(); // 先跳到第一处，看清楚再替换
+            return;
+        }
+        targets = [reader.hits[reader.cur]];
+    }
+    // 按楼分组，从后往前替换，前面的位置不会被影响
+    const byFloor = new Map();
+    targets.forEach(h => byFloor.set(h.id, [...(byFloor.get(h.id) || []), h]));
+    const batch = [];
+    byFloor.forEach((hs, id) => {
+        let text = String(chat[id].mes);
+        batch.push({ id, old: text });
+        hs.sort((x, y) => y.a - x.a).forEach(h => { text = text.slice(0, h.a) + rep + text.slice(h.b); });
+        setFloorText(id, text);
+    });
+    reader.undo.push(batch);
+    await ctx().saveChat();
+
+    const last = targets[0];
+    readerSearch();
+    renderReader();
+    if (all) {
+        toastr.success(`已替换 ${targets.length} 处`);
+    } else {
+        // 跳到被替换那处后面的下一个
+        const next = reader.hits.findIndex(h => h.id > last.id || (h.id === last.id && h.a >= last.a + rep.length));
+        if (next >= 0) showHit(next);
+        else scrollToFloor(last.id);
+    }
+}
+
+async function readerUndo() {
+    const batch = reader.undo.pop();
+    if (!batch) {
+        toastr.info('没有可以撤销的替换');
+        return;
+    }
+    batch.forEach(({ id, old }) => setFloorText(id, old));
+    await ctx().saveChat();
+    readerSearch();
+    renderReader();
+    scrollToFloor(batch[0].id);
+    toastr.success('已撤销上一次替换');
 }
 
 // ───── 草稿自动恢复（存在本机浏览器里） ─────
@@ -861,7 +1316,6 @@ async function offerDraft() {
 // 正文内容变了之后统一调用
 function afterEdit() {
     renderBack();
-    if (boxOpen('nav')) renderNav();
     saveDraftSoon();
 }
 
@@ -930,7 +1384,7 @@ const snap = () => {
     const ta = bodyEl();
     return { v: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
 };
-const isDirty = () => !!state.target && !!bodyEl() && bodyEl().value !== state.target.initial;
+const isDirty = () => !!state.target && state.target.kind !== 'reader' && !!bodyEl() && bodyEl().value !== state.target.initial;
 
 function ensureShell() {
     if ($('#rs_overlay').length) return;
@@ -943,6 +1397,7 @@ function ensureShell() {
         <option value="char">角色卡</option>
         <option value="persona">用户人设</option>
         <option value="world">世界书</option>
+        <option value="reader">阅读</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
       <div class="rs_icon rs_close fa-solid fa-xmark" title="关闭"></div>
@@ -962,13 +1417,19 @@ function ensureShell() {
       <div class="rs_cliche" title="跳到下一个八股词"></div>
       <div class="rs_icon rs_cliche_set fa-solid fa-list-ul" title="编辑八股词表"></div>
       <div class="rs_icon rs_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
-      <div class="rs_icon rs_nav_btn fa-solid fa-bars-staggered" title="目录"></div>
+      <div class="rs_icon rs_lib_btn fa-solid fa-star" title="素材库"></div>
       <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
       <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
       <div class="rs_icon rs_ver_add fa-solid fa-bookmark" title="存为版本"></div>
       <div class="menu_button rs_save">保存</div>
     </div>
-    <div class="rs_nav_box"></div>
+    <div class="rs_lib_box">
+      <div class="rs_lib_head">
+        <input type="text" class="rs_lib_q" placeholder="搜素材">
+        <div class="menu_button rs_lib_add">收藏选中</div>
+      </div>
+      <div class="rs_lib_list"></div>
+    </div>
     <div class="rs_find_box">
       <div class="rs_find_row">
         <input type="text" class="rs_find_q" placeholder="查找">
@@ -991,9 +1452,41 @@ function ensureShell() {
       </div>
       <textarea class="rs_cliche_input" rows="4" spellcheck="false" placeholder="一行一个；中间隔字用 ……，比如 不是……而是"></textarea>
     </div>
+    <div class="rs_reader">
+      <div class="rs_bar rs_rd_bar">
+        <select class="rs_rd_theme text_pole">
+          <option value="paper">米白</option>
+          <option value="sage">青绿</option>
+          <option value="dark">夜黑</option>
+          <option value="navy">藏蓝</option>
+          <option value="follow">跟随主题</option>
+        </select>
+        <div class="rs_bar_title"></div>
+        <div class="rs_icon rs_rd_font" data-d="-1" title="字小一点">A-</div>
+        <div class="rs_icon rs_rd_font" data-d="1" title="字大一点">A+</div>
+        <div class="rs_icon rs_rd_jump fa-solid fa-location-arrow" title="跳到第几楼"></div>
+        <div class="rs_icon rs_rd_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
+      </div>
+      <div class="rs_rd_find">
+        <div class="rs_find_row">
+          <input type="text" class="rs_rd_q" placeholder="在整个聊天里查找">
+          <span class="rs_find_info rs_rd_info"></span>
+          <div class="menu_button rs_rd_next">下一个</div>
+        </div>
+        <div class="rs_find_row">
+          <input type="text" class="rs_rd_r" placeholder="替换成（留空就是删除）">
+          <div class="menu_button rs_rd_one">替换</div>
+          <div class="menu_button rs_rd_all">全部</div>
+        </div>
+        <div class="rs_find_row">
+          <input type="text" class="rs_rd_ex" placeholder="跳过这些标签里的内容，比如 count think">
+          <div class="menu_button rs_rd_undo">撤销替换</div>
+        </div>
+      </div>
+      <div class="rs_reader_body"></div>
+    </div>
     <div class="rs_body_wrap">
       <div class="rs_body_back" aria-hidden="true"></div>
-      <div class="rs_body_measure" aria-hidden="true"></div>
       <textarea class="rs_body_text" spellcheck="false"></textarea>
     </div>
   </div>
@@ -1030,6 +1523,19 @@ function applySplitRatio() {
 function showTarget(t) {
     if (!t) return;
     ensureShell();
+    clearSel();
+    $('#rs_panel').toggleClass('rs_mode_reader', t.kind === 'reader');
+    if (t.kind === 'reader') {
+        state.target = t;
+        $('#rs_panel .rs_kind').val('reader');
+        $('#rs_panel .rs_title').text(t.subtitle);
+        if (settings().lastKind !== 'reader') {
+            settings().lastKind = 'reader';
+            ctx().saveSettingsDebounced();
+        }
+        openReader();
+        return;
+    }
     Object.assign(state, { target: t, ref: t.ref, used: new Set(), caret: null, undo: [], redo: [], typing: false });
 
     $('#rs_panel .rs_title').html(t.subtitle || '');
@@ -1056,7 +1562,6 @@ function showTarget(t) {
     $('#rs_panel .rs_ref_pane').scrollTop(0);
     ta.scrollTop = 0;
     renderBack();
-    if (boxOpen('nav')) renderNav();
     offerDraft();
 }
 
@@ -1157,10 +1662,11 @@ function renderRef() {
             const k = `${state.ref}-${li}-${si}`;
             const cls = state.used.has(k) ? 'rs_used' : (bodySet && s.trim() && !bodySet.has(s.trim()) ? 'rs_gone' : '');
             const inner = clicheActive() ? markCliche(s).html : escapeHtml(s);
-            return `<span class="rs_s ${cls}" data-k="${k}">${inner}</span>`;
+            return `<span class="rs_s ${cls}" data-k="${k}" data-g="${li}" data-i="${si}">${inner}</span>`;
         }).join('');
         return `<p>${spans}</p>`;
     }).join('');
+    sel = null;
     $('#rs_panel .rs_ref_pane').html(html);
 }
 
@@ -1185,7 +1691,7 @@ function updateUndoButtons() {
     $('#rs_panel .rs_redo').toggleClass('rs_off', !state.redo.length);
 }
 
-function insertSentence(text, key) {
+function insertSentence(text) {
     const ta = bodyEl();
     if (ta.readOnly) return;
     const val = ta.value;
@@ -1202,7 +1708,6 @@ function insertSentence(text, key) {
     state.caret = { s: pos, e: pos };
     try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
     state.last = { v: ta.value, s: pos, e: pos };
-    state.used.add(key);
     renderRef();
     updateUndoButtons();
     afterEdit();
@@ -1339,6 +1844,13 @@ const LOADERS = {
     char: () => charTarget(),
     persona: () => personaTarget(),
     world: () => worldTarget(),
+    reader: async () => {
+        if (!ctx().chat.length) {
+            toastr.warning('当前聊天还没有消息');
+            return null;
+        }
+        return { kind: 'reader', subtitle: '整个聊天', initial: '' };
+    },
 };
 
 // 点悬浮球：打开上次用的那一类；打不开就依次试其他类
@@ -1395,9 +1907,62 @@ function bindPanelEvents() {
             renderRef();
             renderBack();
         })
-        .on('click', '#rs_panel .rs_s', function () {
-            insertSentence($(this).text(), String($(this).data('k')));
+        .on('click', '#rs_panel .rs_s', function (e) {
+            e.stopPropagation();
+            onSentenceTap(this);
         })
+        .on('click', '#rs_panel .rs_tb_btn', function (e) {
+            e.stopPropagation();
+            onToolbarAct(this.dataset.act);
+        })
+        .on('click', '#rs_panel .rs_ref_pane, #rs_panel .rs_reader_body', clearSel)
+        .on('focus', '#rs_panel .rs_body_text', function () { this.parentElement.classList.add('rs_focus'); })
+        .on('blur', '#rs_panel .rs_body_text', function () {
+            this.parentElement.classList.remove('rs_focus');
+            renderBack(); // 收起键盘后，插入位置标记停在最后点的地方
+        })
+        .on('click', '#rs_panel .rs_lib_btn', () => toggleBox('lib'))
+        .on('change', '#rs_panel .rs_rd_theme', function () {
+            settings().readerTheme = this.value;
+            ctx().saveSettingsDebounced();
+            applyReaderStyle();
+        })
+        .on('click', '#rs_panel .rs_rd_font', function () {
+            settings().readerFont = Math.min(26, Math.max(13, (parseInt(settings().readerFont) || DEFAULTS.readerFont) + Number(this.dataset.d)));
+            ctx().saveSettingsDebounced();
+            applyReaderStyle();
+        })
+        .on('click', '#rs_panel .rs_rd_jump', jumpToFloor)
+        .on('click', '#rs_panel .rs_rd_more', e => {
+            e.stopPropagation();
+            loadEarlier();
+        })
+        .on('click', '#rs_panel .rs_rd_find_btn', function () {
+            const $f = $('#rs_panel .rs_rd_find').toggle();
+            $(this).toggleClass('rs_on', $f.is(':visible'));
+            if ($f.is(':visible')) $('#rs_panel .rs_rd_q').trigger('focus');
+            readerSearch();
+            renderReader();
+        })
+        .on('input', '#rs_panel .rs_rd_q', () => {
+            readerSearch();
+            renderReader();
+        })
+        .on('input', '#rs_panel .rs_rd_ex', function () {
+            settings().findExclude = this.value;
+            ctx().saveSettingsDebounced();
+            readerSearch();
+            renderReader();
+        })
+        .on('keydown', '#rs_panel .rs_rd_q', e => { if (e.key === 'Enter') readerNext(); })
+        .on('click', '#rs_panel .rs_rd_next', readerNext)
+        .on('click', '#rs_panel .rs_rd_one', () => readerReplace(false))
+        .on('click', '#rs_panel .rs_rd_all', () => readerReplace(true))
+        .on('click', '#rs_panel .rs_rd_undo', readerUndo)
+        .on('click', '#rs_panel .rs_lib_add', collectSelection)
+        .on('input', '#rs_panel .rs_lib_q', renderLib)
+        .on('click', '#rs_panel .rs_lib_main', function () { useLibItem($(this).closest('.rs_lib_item').data('id')); })
+        .on('click', '#rs_panel .rs_lib_del', function () { deleteLibItem($(this).closest('.rs_lib_item').data('id')); })
         .on('input', '#rs_panel .rs_body_text', onBodyInput)
         .on('click keyup select', '#rs_panel .rs_body_text', function () {
             state.caret = { s: this.selectionStart, e: this.selectionEnd };
@@ -1430,8 +1995,6 @@ function bindPanelEvents() {
             ctx().saveSettingsDebounced();
             renderBack();
         })
-        .on('click', '#rs_panel .rs_nav_btn', () => toggleBox('nav'))
-        .on('click', '#rs_panel .rs_nav_item', function () { jumpToHeading(Number($(this).data('pos'))); })
         .on('input', '#rs_panel .rs_find_q', renderBack)
         .on('keydown', '#rs_panel .rs_find_q', e => { if (e.key === 'Enter') findNext(); })
         .on('click', '#rs_panel .rs_find_next', findNext)
@@ -1670,6 +2233,7 @@ jQuery(() => {
     c.eventSource.on(ev.GENERATION_ENDED, onGenEnded);
     c.eventSource.on(ev.GENERATION_STOPPED, onGenEnded);
     c.eventSource.on(ev.CHAT_CHANGED, () => {
+        if (state.target?.kind === 'reader') openReader();
         pending = null;
         injectButtons();
         if (state.target?.kind === 'msg') {
