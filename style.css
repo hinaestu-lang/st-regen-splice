@@ -708,8 +708,7 @@
 }
 
 /* 楼与楼之间的分隔线 */
-#rs_panel .rs_floor + .rs_floor,
-#rs_panel .rs_floor + .rs_rd_sign {
+#rs_panel .rs_floor + .rs_floor {
     border-top: 1px solid color-mix(in srgb, var(--rd-muted) 35%, transparent);
     padding-top: 2em;
 }
@@ -781,11 +780,10 @@
     color: var(--rd-muted);
 }
 
-/* 整页最底下的落款 */
-#rs_panel .rs_rd_sign {
-    padding-top: 1.6em;
-    font-size: 0.85em;
-    color: var(--rd-muted);
+/* 书名下面的落款 */
+#rs_panel .rs_floor_sign {
+    margin-top: 0.3em;
+    padding-left: 0.75em;       /* 跟书名的字对齐，空出前面的「/ 」 */
 }
 
 #rs_panel .rs_floor_empty {
@@ -875,6 +873,15 @@
 #rs_panel .rs_ri {
     color: var(--rd-italic);
     font-style: italic;
+}
+
+#rs_panel .rs_rb {
+    font-weight: 700;
+}
+
+#rs_panel .rs_rs {
+    text-decoration: line-through;
+    opacity: 0.7;
 }
 
 #rs_panel .rs_reader_body .rs_s.rs_sel {

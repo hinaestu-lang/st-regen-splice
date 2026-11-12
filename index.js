@@ -23,8 +23,10 @@ const DEFAULTS = {
     readerFont: 19,    // 阅读页字号（像素）
     readerIndent: false, // 段首空两格
     readerShowTime: true, // 名字下面显示日期
+    readerMarkdown: true, // 按 Markdown 显示：**粗体** *斜体* ~~删除线~~，记号本身不显示
+    readerQuote: true, // 对话（引号里的字）用对话颜色
     readerBook: '',    // 书名：填了每楼末尾会显示「/ 书名 · 第 N 楼」
-    readerSign: '',    // 落款：显示在整页最底下
+    readerSign: '',    // 落款：显示在书名下面一行
     readerBody: 'content', // 只显示这个标签里的正文；没有这个标签的楼层显示全文
     readerHide: 'think thinking', // 整块不显示的标签，空格隔开；其他标签只去掉 <> 符号、保留里面的字
     libMax: 500,       // 素材库最多存多少条，超出删掉最旧的
@@ -979,8 +981,8 @@ const READER_PRESETS = {
 };
 const COLOR_KEYS = [['bg', '底色'], ['text', '正文'], ['quote', '对话'], ['italic', '斜体'], ['muted', '次要']];
 
-// 把原文转成显示用的文字：去掉要隐藏的标签整块、其他标签的 <> 记号、* 号（* 号之间的字显示成斜体）
-// 返回 { text, map, it, shown }：map[i] 是显示文字第 i 个字在原文里的位置，shown[j] 表示原文第 j 个字有没有显示
+// 把原文转成显示用的文字：去掉要隐藏的标签整块、其他标签的 <> 记号、Markdown 记号
+// 返回 { text, map, fmt, shown }：map[i] 是显示文字第 i 个字在原文里的位置，shown[j] 表示原文第 j 个字有没有显示
 function readerDisplay(raw) {
     raw = String(raw ?? '');
     const gone = new Uint8Array(raw.length);
@@ -1022,22 +1024,35 @@ function readerDisplay(raw) {
 
     let text = '';
     const map = [];
-    const it = [];
+    const fmt = []; // 每个字的格式：1 斜体、2 粗体、4 删除线
     const shown = new Uint8Array(raw.length);
-    let italic = false;
+    const md = settings().readerMarkdown;
+    let f = 0;
     for (let j = 0; j < raw.length; j++) {
         if (gone[j]) continue;
-        if (raw[j] === '*') {
-            italic = !italic;
-            continue;
+        if (md) {
+            if (raw.startsWith('**', j)) {
+                f ^= 2;
+                j++;
+                continue;
+            }
+            if (raw.startsWith('~~', j)) {
+                f ^= 4;
+                j++;
+                continue;
+            }
+            if (raw[j] === '*') {
+                f ^= 1;
+                continue;
+            }
         }
-        if (raw[j] === '\n') italic = false;
+        if (raw[j] === '\n') f = 0;
         text += raw[j];
         map.push(j);
-        it.push(italic);
+        fmt.push(f);
         shown[j] = 1;
     }
-    return { text, map, it, shown };
+    return { text, map, fmt, shown };
 }
 
 function floorAvatar(m) {
@@ -1078,14 +1093,15 @@ function floorHtml(id) {
         if (line.trim()) {
             let inQuote = false;
             let pos = off;
+            const quoteOn = settings().readerQuote;
             const spans = splitSentences(line).map((sen, si) => {
                 let html = '';
                 let runKey = null;
                 let run = '';
                 const flush = () => {
                     if (!run) return;
-                    const [q, i, h] = runKey.split('|');
-                    const cls = [q === '1' && 'rs_rq', i === '1' && 'rs_ri', h !== '-1' && 'rs_rhit'].filter(Boolean).join(' ');
+                    const [q, f, h] = runKey.split('|');
+                    const cls = [q === '1' && 'rs_rq', f & 1 && 'rs_ri', f & 2 && 'rs_rb', f & 4 && 'rs_rs', h !== '-1' && 'rs_rhit'].filter(Boolean).join(' ');
                     html += cls ? `<span class="${cls}"${h !== '-1' ? ` data-h="${h}"` : ''}>${escapeHtml(run)}</span>` : escapeHtml(run);
                     run = '';
                 };
@@ -1096,7 +1112,7 @@ function floorHtml(id) {
                     let q = inQuote;
                     if (!inQuote && QUOTE_OPEN.includes(ch)) inQuote = q = true;
                     else if (inQuote && QUOTE_CLOSE.includes(ch)) inQuote = false;
-                    const key = `${q ? 1 : 0}|${d.it[idx] ? 1 : 0}|${hitAt[idx]}`;
+                    const key = `${q && quoteOn ? 1 : 0}|${d.fmt[idx]}|${hitAt[idx]}`;
                     if (key !== runKey) {
                         flush();
                         runKey = key;
@@ -1117,6 +1133,7 @@ function floorHtml(id) {
     const initial = escapeHtml((m.name || '?').slice(0, 1));
     const time = s.readerShowTime ? floorTime(m) : '';
     const book = String(s.readerBook || '').trim();
+    const sign = String(s.readerSign || '').trim();
     return `
 <section class="rs_floor ${m.is_system ? 'rs_floor_hidden' : ''}" data-id="${id}">
   <div class="rs_floor_head">
@@ -1126,7 +1143,7 @@ function floorHtml(id) {
     <div class="rs_floor_meta">第 ${id} 楼${time ? `　${escapeHtml(time)}` : ''}</div>
   </div>
   <div class="rs_floor_text">${body || '<p class="rs_floor_empty">（这一楼没有可显示的文字）</p>'}</div>
-  ${book ? `<div class="rs_floor_src">/ ${escapeHtml(book)} · 第 ${id} 楼</div>` : ''}
+  ${book || sign ? `<div class="rs_floor_src">${book ? `<div>/ ${escapeHtml(book)} · 第 ${id} 楼</div>` : ''}${sign ? `<div class="rs_floor_sign">${escapeHtml(sign)}</div>` : ''}</div>` : ''}
 </section>`;
 }
 
@@ -1149,15 +1166,42 @@ function applyReaderStyle() {
     syncReaderSetUI();
 }
 
+// rgb(…) 转成取色器要的 #rrggbb
+function toHex(css) {
+    css = String(css);
+    const m = css.match(/-?\d*\.?\d+/g);
+    if (!m || m.length < 3) return '#888888';
+    // 混色出来的颜色是 color(srgb 0.1 0.2 0.3) 这种 0～1 的写法
+    const scale = css.startsWith('color(') ? 255 : 1;
+    return '#' + m.slice(0, 3).map(x => Math.max(0, Math.min(255, Math.round(Number(x) * scale))).toString(16).padStart(2, '0')).join('');
+}
+
+// 跟随主题时从页面上读出实际颜色
+function computedReaderColors() {
+    const $b = $('#rs_panel .rs_reader_body');
+    if (!$b.length) return null;
+    const probe = name => {
+        const el = document.createElement('span');
+        el.style.color = `var(--rd-${name})`;
+        $b[0].appendChild(el);
+        const v = getComputedStyle(el).color;
+        el.remove();
+        return toHex(v);
+    };
+    const bg = getComputedStyle($('#rs_panel')[0]).backgroundColor;
+    return { bg: toHex(bg), text: probe('text'), quote: probe('quote'), italic: probe('italic'), muted: probe('muted') };
+}
+
 // 让设置框里的控件显示当前的值
 function syncReaderSetUI() {
     const s = settings();
-    const colors = readerColors();
+    const colors = readerColors() || computedReaderColors();
     $('#rs_panel .rs_rd_sw').each(function () { $(this).toggleClass('rs_on', this.dataset.p === s.readerTheme); });
-    COLOR_KEYS.forEach(([k]) => $(`#rs_panel .rs_rd_color[data-k="${k}"]`).val(colors ? colors[k] : '#888888'));
+    COLOR_KEYS.forEach(([k]) => $(`#rs_panel .rs_rd_color[data-k="${k}"]`).val(colors?.[k] || '#888888'));
     $('#rs_panel .rs_rd_fs').text(readerFontSize());
     $('#rs_panel .rs_rd_indent_cb').prop('checked', !!s.readerIndent);
     $('#rs_panel .rs_rd_time_cb').prop('checked', !!s.readerShowTime);
+    $('#rs_panel .rs_rd_cb').each(function () { this.checked = !!s[this.dataset.k]; });
     $('#rs_panel .rs_rd_text').each(function () {
         if (document.activeElement !== this) this.value = s[this.dataset.k] ?? '';
     });
@@ -1173,8 +1217,6 @@ function renderReader() {
     const chat = ctx().chat;
     let html = reader.from > 0 ? `<div class="rs_rd_more">加载更早的 ${Math.min(READER_CHUNK, reader.from)} 楼（前面还有 ${reader.from} 楼）</div>` : '';
     for (let id = reader.from; id < chat.length; id++) html += floorHtml(id);
-    const sign = String(settings().readerSign || '').trim();
-    if (sign) html += `<div class="rs_rd_sign">${escapeHtml(sign)}</div>`;
     clearSel();
     $('#rs_panel .rs_reader_body').html(html).find('img.rs_floor_av').on('error', function () {
         $(this).next('.rs_floor_av_none').prop('hidden', false);
@@ -1552,9 +1594,13 @@ function ensureShell() {
           <label class="checkbox_label"><input type="checkbox" class="rs_rd_indent_cb"> 段首缩进</label>
           <label class="checkbox_label"><input type="checkbox" class="rs_rd_time_cb"> 显示日期</label>
         </div>
+        <div class="rs_rd_row">
+          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerMarkdown"> Markdown（**粗体** *斜体* ~~删除线~~）</label>
+          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerQuote"> 对话染色</label>
+        </div>
         <div class="rs_find_row">
           <input type="text" class="rs_rd_text" data-k="readerBook" placeholder="书名">
-          <input type="text" class="rs_rd_text" data-k="readerSign" placeholder="落款，显示在最底下">
+          <input type="text" class="rs_rd_text" data-k="readerSign" placeholder="落款，显示在书名下面">
         </div>
         <div class="rs_find_row">
           <input type="text" class="rs_rd_text" data-k="readerBody" placeholder="只看这个标签里的正文，如 content">
@@ -2029,7 +2075,11 @@ function bindPanelEvents() {
         })
         .on('input', '#rs_panel .rs_rd_color', function () {
             const s = settings();
-            if (s.readerTheme === 'follow') s.readerTheme = 'paper'; // 跟随主题时没法单独调，改成在米白的基础上调
+            if (s.readerTheme === 'follow') {
+                // 跟随主题时，以主题现在的颜色为底，只改这一个
+                s.readerColors = computedReaderColors();
+                s.readerTheme = 'paper';
+            }
             s.readerColors = { ...(s.readerColors || {}), [this.dataset.k]: this.value };
             setReaderOption('readerColors', s.readerColors);
         })
@@ -2039,6 +2089,11 @@ function bindPanelEvents() {
         .on('change', '#rs_panel .rs_rd_indent_cb', function () { setReaderOption('readerIndent', this.checked); })
         .on('change', '#rs_panel .rs_rd_time_cb', function () {
             setReaderOption('readerShowTime', this.checked);
+            renderReader();
+        })
+        .on('change', '#rs_panel .rs_rd_cb', function () {
+            setReaderOption(this.dataset.k, this.checked);
+            if (boxOpenReaderFind()) readerSearch(); // 记号显示与否会影响能找到的内容
             renderReader();
         })
         .on('input', '#rs_panel .rs_rd_text', function () {
