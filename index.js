@@ -17,6 +17,7 @@ const DEFAULTS = {
     splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
     lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
+    findExclude: '',   // 查找替换时跳过的标签名，空格隔开，比如 count think
     clicheOn: true,    // 楼层编辑时是否标出八股词
     clicheWhole: true, // true = 把带八股词的整句标出来；false = 只标那几个字
     // 八股词表：一行一个；用 /.../ 包起来的是正则，可以匹配变体
@@ -295,6 +296,7 @@ function msgTarget(id) {
     if (versions.length === 1) ref = 0;
     return {
         kind: 'msg',
+        draftKey: `msg:${ctx().getCurrentChatId?.() ?? ''}:${id}`,
         subtitle: `第 ${id} 楼`,
         pickers: '',
         refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: t })),
@@ -568,17 +570,20 @@ function clicheRanges(text) {
     return out;
 }
 
-// 把文字转成带 <mark> 的 HTML
-function markCliche(text) {
-    const ranges = clicheRanges(text);
+// 把 [[开始, 结束], ...] 范围包成 <mark>
+function markRanges(text, ranges, cls) {
     let html = '';
     let last = 0;
     ranges.forEach(([a, b]) => {
-        html += escapeHtml(text.slice(last, a)) + `<mark class="rs_mark">${escapeHtml(text.slice(a, b))}</mark>`;
+        html += escapeHtml(text.slice(last, a)) + `<mark class="${cls}">${escapeHtml(text.slice(a, b))}</mark>`;
         last = b;
     });
-    html += escapeHtml(text.slice(last));
-    return { html, count: ranges.length };
+    return html + escapeHtml(text.slice(last));
+}
+
+function markCliche(text) {
+    const ranges = clicheRanges(text);
+    return { html: markRanges(text, ranges, 'rs_mark'), count: ranges.length };
 }
 
 function renderBack() {
@@ -586,36 +591,297 @@ function renderBack() {
     const $back = $('#rs_panel .rs_body_back');
     const $btn = $('#rs_panel .rs_cliche');
     if (!ta || !$back.length) return;
-    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
-    const tail = ta.value.endsWith('\n') ? '\u200b' : '';
+    const text = ta.value;
     const isMsg = state.target?.kind === 'msg';
+
+    // 八股只在楼层里用
     $btn.toggle(isMsg);
     $('#rs_panel .rs_cliche_set').toggle(isMsg);
-    if (!isMsg) $('#rs_panel .rs_cliche_box').hide();
+    if (!isMsg) {
+        $('#rs_panel .rs_cliche_box').hide();
+        $('#rs_panel .rs_cliche_set').removeClass('rs_on');
+    }
+    const cliche = isMsg && clicheActive() ? clicheRanges(text) : null;
+    if (cliche) $btn.text(`八股 ${cliche.length}`).addClass('rs_on').toggleClass('rs_hit', cliche.length > 0);
+    else $btn.text('八股 关').removeClass('rs_on rs_hit');
 
-    if (isMsg && clicheActive()) {
-        const { html, count } = markCliche(ta.value);
-        $back.html(html + tail);
-        $btn.text(`八股 ${count}`).addClass('rs_on').toggleClass('rs_hit', count > 0);
+    const find = boxOpen('find') ? findRanges(text) : null;
+    if (find) updateFindInfo(find.length);
+
+    // 高亮层同一时间只画一种：查找 > 八股 > 改动对比
+    let html = '';
+    if (find?.length) {
+        html = markRanges(text, find, 'rs_find');
+    } else if (cliche) {
+        html = markRanges(text, cliche, 'rs_mark');
     } else if (!isMsg && state.diff) {
         const refText = state.target.refs[state.ref]?.text ?? '';
-        $back.html(refText.trim() ? markAdded(ta.value, sentenceSet(refText)).html + tail : '');
-    } else {
-        $back.empty();
-        $btn.text('八股 关').removeClass('rs_on rs_hit');
+        if (refText.trim()) html = markAdded(text, sentenceSet(refText)).html;
     }
+    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
+    $back.html(html ? html + (text.endsWith('\n') ? '\u200b' : '') : '');
     syncBackScroll();
+}
+
+// ───── 查找替换 ─────
+
+const findQuery = () => String($('#rs_panel .rs_find_q').val() ?? '');
+const findReplacement = () => String($('#rs_panel .rs_find_r').val() ?? '');
+
+// 排除标签：只写名字就行（content、count），写成 <count> 也认
+function excludeNames() {
+    return String(settings().findExclude || '')
+        .split(/[\s,，、]+/)
+        .map(x => x.replace(/[<>/]/g, '').trim())
+        .filter(x => /^[\w-]+$/.test(x));
+}
+
+// 被排除的标签整块（含两边标签）所在的范围；没写结束标签的算到末尾
+function excludedSpans(text) {
+    const spans = [];
+    excludeNames().forEach(name => {
+        const n = escapeRe(name);
+        const re = new RegExp(`<${n}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${n}\\s*>|$)`, 'gi');
+        let m;
+        while ((m = re.exec(text))) {
+            if (!m[0]) {
+                re.lastIndex++;
+                continue;
+            }
+            spans.push([m.index, m.index + m[0].length]);
+        }
+    });
+    return spans;
+}
+
+function findRanges(text) {
+    const q = findQuery();
+    const out = [];
+    if (!q) return out;
+    const skip = excludedSpans(text);
+    let i = text.indexOf(q);
+    while (i >= 0) {
+        const end = i + q.length;
+        if (!skip.some(([a, b]) => i < b && end > a)) out.push([i, end]);
+        i = text.indexOf(q, end);
+    }
+    return out;
+}
+
+function updateFindInfo(count) {
+    $('#rs_panel .rs_find_info').text(findQuery() ? `${count} 处` : '');
+}
+
+// 选中第 i 个命中并滚到那里（高亮层里同一时间只有一种 mark，顺序一致）
+function selectHit(hits, i) {
+    const ta = bodyEl();
+    const [a, b] = hits[i];
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(a, b);
+    state.caret = { s: a, e: b };
+    const scrollToHit = () => {
+        const mark = $('#rs_panel .rs_body_back mark')[i];
+        if (mark) ta.scrollTop = Math.max(0, mark.offsetTop - ta.clientHeight / 3);
+        syncBackScroll();
+    };
+    scrollToHit();
+    setTimeout(scrollToHit, 400); // 手机键盘弹出后面板会变矮，再对准一次
+}
+
+// 从光标往后找下一个，到底了从头再来
+function nextIndex(hits) {
+    const from = state.caret ? state.caret.e : 0;
+    const i = hits.findIndex(h => h[0] >= from);
+    return i < 0 ? 0 : i;
+}
+
+function findNext() {
+    const hits = findRanges(bodyEl().value);
+    if (!hits.length) {
+        toastr.info('没有找到');
+        return;
+    }
+    selectHit(hits, nextIndex(hits));
+}
+
+// 正文整体换成新内容（可撤销）
+function setBody(value, caretPos) {
+    const ta = bodyEl();
+    state.typing = false;
+    pushUndo();
+    ta.value = value;
+    const pos = Math.min(caretPos, value.length);
+    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
+    state.caret = { s: pos, e: pos };
+    state.last = snap();
+    updateUndoButtons();
+    afterEdit();
+    if (state.diff) renderRef();
+}
+
+function replaceOne() {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const hits = findRanges(ta.value);
+    const sel = state.caret || { s: -1, e: -1 };
+    const hit = hits.find(([a, b]) => a === sel.s && b === sel.e);
+    if (!hit) {
+        findNext(); // 还没选中匹配项时，先跳到下一个
+        return;
+    }
+    const piece = findReplacement();
+    setBody(ta.value.slice(0, hit[0]) + piece + ta.value.slice(hit[1]), hit[0] + piece.length);
+    findNext();
+}
+
+function replaceAll() {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const hits = findRanges(ta.value);
+    if (!hits.length) {
+        toastr.info('没有找到');
+        return;
+    }
+    const rep = findReplacement();
+    let out = '';
+    let last = 0;
+    hits.forEach(([a, b]) => {
+        out += ta.value.slice(last, a) + rep;
+        last = b;
+    });
+    setBody(out + ta.value.slice(last), 0);
+    toastr.success(`已替换 ${hits.length} 处，可以撤销`);
+}
+
+// 查找、八股词表、目录三个框同一时间只开一个，省地方
+const BOXES = { find: ['.rs_find_box', '.rs_find_btn'], cliche: ['.rs_cliche_box', '.rs_cliche_set'], nav: ['.rs_nav_box', '.rs_nav_btn'] };
+const boxOpen = which => $(`#rs_panel ${BOXES[which][0]}`).is(':visible');
+
+function toggleBox(which) {
+    const willOpen = !boxOpen(which);
+    for (const [k, [box, btn]] of Object.entries(BOXES)) {
+        const on = k === which && willOpen;
+        $(`#rs_panel ${box}`).toggle(on);
+        $(`#rs_panel ${btn}`).toggleClass('rs_on', on);
+    }
+    if (which === 'find' && willOpen) $('#rs_panel .rs_find_q').trigger('focus');
+    if (which === 'nav' && willOpen) renderNav();
+    renderBack();
+}
+
+// ───── 目录 ─────
+// 认这几种标题行：# 标题、单独一行的 <标签>、单独一行的【标题】
+
+function headings(text) {
+    const out = [];
+    let off = 0;
+    String(text).split('\n').forEach(line => {
+        let m;
+        if ((m = line.match(/^\s*(#{1,6})\s+(.+)/))) out.push({ pos: off, level: m[1].length, label: m[2].trim() });
+        else if ((m = line.match(/^\s*<([A-Za-z_][\w-]*)[^>/]*>\s*$/))) out.push({ pos: off, level: 1, label: `<${m[1]}>` });
+        else if ((m = line.match(/^\s*(【[^】]+】)\s*$/))) out.push({ pos: off, level: 1, label: m[1] });
+        off += line.length + 1;
+    });
+    return out;
+}
+
+function renderNav() {
+    const list = headings(bodyEl().value);
+    $('#rs_panel .rs_nav_box').html(list.length
+        ? list.map(h => `<div class="rs_nav_item" data-pos="${h.pos}" style="padding-left:${(h.level - 1) * 14 + 4}px">${escapeHtml(h.label)}</div>`).join('')
+        : '<div class="rs_empty">没有标题。以 # 开头的行、单独一行的 &lt;标签&gt; 或【标题】会出现在这里。</div>');
+}
+
+// 算出正文里某个位置离顶部多少像素（用一层看不见的同排版文字来量）
+function measureTop(pos) {
+    const m = $('#rs_panel .rs_body_measure')[0];
+    m.innerHTML = escapeHtml(bodyEl().value.slice(0, pos)) + '<span>\u200b</span>';
+    const top = m.lastChild.offsetTop;
+    m.innerHTML = '';
+    return top;
+}
+
+function jumpToHeading(pos) {
+    const ta = bodyEl();
+    ta.scrollTop = Math.max(0, measureTop(pos) - 6);
+    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
+    state.caret = { s: pos, e: pos };
+    syncBackScroll();
+    toggleBox('nav'); // 跳过去后收起目录，正文多露出来
+}
+
+// ───── 草稿自动恢复（存在本机浏览器里） ─────
+
+const DRAFT_DELAY = 600; // 停止输入多少毫秒后记一次草稿
+let draftTimer = 0;
+
+function draftStoreKey() {
+    const id = state.target?.key || state.target?.draftKey;
+    return id ? `regenSplice:draft:${id}` : null;
+}
+
+function saveDraftNow() {
+    clearTimeout(draftTimer);
+    const k = draftStoreKey();
+    if (!k || !bodyEl()) return;
+    try {
+        if (isDirty()) localStorage.setItem(k, JSON.stringify({ text: bodyEl().value, base: state.target.initial, time: Date.now() }));
+        else localStorage.removeItem(k);
+    } catch { /* 存储满了之类，忽略 */ }
+}
+
+function saveDraftSoon() {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraftNow, DRAFT_DELAY);
+}
+
+function clearDraft() {
+    clearTimeout(draftTimer);
+    const k = draftStoreKey();
+    if (k) {
+        try { localStorage.removeItem(k); } catch { /* 忽略 */ }
+    }
+}
+
+async function offerDraft() {
+    const k = draftStoreKey();
+    if (!k) return;
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem(k) || 'null'); } catch { /* 坏数据当作没有 */ }
+    if (!d || typeof d.text !== 'string' || d.text === state.target.initial) return;
+    const note = d.base !== state.target.initial ? '（原文之后在别处改过）' : '';
+    if (await askConfirm(`有一份 ${fmtTime(d.time)} 没保存的修改${note}，要恢复吗？`)) {
+        setBody(d.text, 0);
+        toastr.info('已恢复草稿，点保存才会生效');
+    } else {
+        clearDraft();
+    }
+}
+
+// 正文内容变了之后统一调用
+function afterEdit() {
+    renderBack();
+    if (boxOpen('nav')) renderNav();
+    saveDraftSoon();
+}
+
+// 八股设置统一从这里改：同步面板和扩展设置两处的控件，再刷新高亮
+function setClicheSetting(key, value) {
+    settings()[key] = value;
+    ctx().saveSettingsDebounced();
+    $('#rs_cliche_on, #rs_panel .rs_cliche_toggle').prop('checked', settings().clicheOn);
+    $('#rs_cliche_whole, #rs_panel .rs_cliche_whole').prop('checked', settings().clicheWhole);
+    $('#rs_cliche_words, #rs_panel .rs_cliche_input').not(document.activeElement).val(settings().clicheWords);
+    if (state.target) {
+        renderBack();
+        renderRef();
+    }
 }
 
 // 点「八股 N」：跳到下一个八股词并选中，直接打字就能替换
 function jumpToNextCliche() {
     if (!settings().clicheOn) {
-        settings().clicheOn = true;
-        $('#rs_cliche_on').prop('checked', true);
-        $('#rs_panel .rs_cliche_toggle').prop('checked', true);
-        ctx().saveSettingsDebounced();
-        renderBack();
-        renderRef();
+        setClicheSetting('clicheOn', true);
         return;
     }
     const ta = bodyEl();
@@ -625,26 +891,8 @@ function jumpToNextCliche() {
         toastr.info('正文里没有八股词了');
         return;
     }
-    const from = state.caret ? state.caret.e : 0;
-    let i = hits.findIndex(h => h[0] >= from);
-    if (i < 0) i = 0; // 到底了从头再来
-    const [a, b] = hits[i];
-
-    ta.focus({ preventScroll: true });
-    ta.setSelectionRange(a, b);
-    state.caret = { s: a, e: b };
-    const mark = $('#rs_panel .rs_body_back .rs_mark')[i];
-    if (mark) ta.scrollTop = Math.max(0, mark.offsetTop - ta.clientHeight / 3);
-    syncBackScroll();
-}
-
-// 面板里直接改八股词表
-function onClicheWordsInput() {
-    settings().clicheWords = this.value;
-    $('#rs_cliche_words').val(this.value);
-    ctx().saveSettingsDebounced();
-    renderBack();
-    renderRef();
+    if (boxOpen('find')) toggleBox('find'); // 关掉查找，让高亮层显示八股
+    selectHit(hits, nextIndex(hits));
 }
 
 function syncBackScroll() {
@@ -656,7 +904,7 @@ function syncBackScroll() {
 let backRaf = 0;
 function scheduleBack() {
     cancelAnimationFrame(backRaf);
-    backRaf = requestAnimationFrame(renderBack);
+    backRaf = requestAnimationFrame(afterEdit);
 }
 
 // ───── 面板 ─────
@@ -674,6 +922,8 @@ const state = {
     typingTimer: null,
     diffTimer: null,
 };
+
+let gripDrag = null; // 正在拖动中间横条时的起点
 
 const bodyEl = () => $('#rs_panel .rs_body_text')[0];
 const snap = () => {
@@ -711,10 +961,28 @@ function ensureShell() {
       <div class="rs_bar_title">正文</div>
       <div class="rs_cliche" title="跳到下一个八股词"></div>
       <div class="rs_icon rs_cliche_set fa-solid fa-list-ul" title="编辑八股词表"></div>
+      <div class="rs_icon rs_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
+      <div class="rs_icon rs_nav_btn fa-solid fa-bars-staggered" title="目录"></div>
       <div class="rs_icon rs_undo fa-solid fa-rotate-left" title="撤销"></div>
       <div class="rs_icon rs_redo fa-solid fa-rotate-right" title="恢复"></div>
       <div class="rs_icon rs_ver_add fa-solid fa-bookmark" title="存为版本"></div>
       <div class="menu_button rs_save">保存</div>
+    </div>
+    <div class="rs_nav_box"></div>
+    <div class="rs_find_box">
+      <div class="rs_find_row">
+        <input type="text" class="rs_find_q" placeholder="查找">
+        <span class="rs_find_info"></span>
+        <div class="menu_button rs_find_next">下一个</div>
+      </div>
+      <div class="rs_find_row">
+        <input type="text" class="rs_find_r" placeholder="替换成（留空就是删除）">
+        <div class="menu_button rs_find_one">替换</div>
+        <div class="menu_button rs_find_all">全部</div>
+      </div>
+      <div class="rs_find_row">
+        <input type="text" class="rs_find_ex" placeholder="跳过这些标签里的内容，比如 count think">
+      </div>
     </div>
     <div class="rs_cliche_box">
       <div class="rs_cliche_opts">
@@ -725,6 +993,7 @@ function ensureShell() {
     </div>
     <div class="rs_body_wrap">
       <div class="rs_body_back" aria-hidden="true"></div>
+      <div class="rs_body_measure" aria-hidden="true"></div>
       <textarea class="rs_body_text" spellcheck="false"></textarea>
     </div>
   </div>
@@ -752,6 +1021,7 @@ function fitToViewport() {
 }
 
 function applySplitRatio() {
+    if (gripDrag) return;
     const ratio = Math.min(0.8, Math.max(0.15, Number(settings().splitRatio) || DEFAULTS.splitRatio));
     const r = $('#rs_overlay').hasClass('rs_kb') ? Math.min(ratio, KEYBOARD_REF_RATIO) : ratio;
     $('#rs_panel .rs_ref_pane').css('height', Math.round($('#rs_panel').height() * r) + 'px');
@@ -786,10 +1056,15 @@ function showTarget(t) {
     $('#rs_panel .rs_ref_pane').scrollTop(0);
     ta.scrollTop = 0;
     renderBack();
+    if (boxOpen('nav')) renderNav();
+    offerDraft();
 }
 
 async function switchTarget(loader) {
-    if (isDirty() && !(await askConfirm('正文改了还没保存，切换会丢掉改动，继续吗？'))) return false;
+    if (isDirty()) {
+        if (!(await askConfirm('正文改了还没保存，切换会丢掉改动，继续吗？'))) return false;
+        clearDraft();
+    }
     const t = await loader();
     if (!t) return false;
     showTarget(t);
@@ -863,7 +1138,7 @@ function useRefWhole() {
     state.last = snap();
     updateUndoButtons();
     if (state.diff) renderRef();
-    renderBack();
+    afterEdit();
     toastr.info('已放进正文，点保存才会生效');
 }
 
@@ -902,7 +1177,7 @@ function applySnap(sn) {
     try { ta.setSelectionRange(sn.s, sn.e); } catch { /* 忽略 */ }
     state.last = snap();
     if (state.diff) renderRef();
-    renderBack();
+    afterEdit();
 }
 
 function updateUndoButtons() {
@@ -930,7 +1205,7 @@ function insertSentence(text, key) {
     state.used.add(key);
     renderRef();
     updateUndoButtons();
-    renderBack();
+    afterEdit();
 
     const wrap = ta.parentElement; // 输入框背景被强制透明，闪烁放在外层
     wrap.classList.remove('rs_flash');
@@ -970,7 +1245,6 @@ function doRedo() {
     updateUndoButtons();
 }
 
-let gripDrag = null;
 function onGripDown(e) {
     gripDrag = { y: e.clientY, h: $('#rs_panel .rs_ref_pane')[0].offsetHeight };
     e.target.setPointerCapture?.(e.pointerId);
@@ -984,12 +1258,16 @@ function onGripMove(e) {
 function onGripUp() {
     if (!gripDrag) return;
     gripDrag = null;
+    if ($('#rs_overlay').hasClass('rs_kb')) return;
     settings().splitRatio = $('#rs_panel .rs_ref_pane').height() / $('#rs_panel').height();
     ctx().saveSettingsDebounced();
 }
 
-async function closePanel(force = false) {
+// keepDraft：不是用户主动放弃时（比如切换聊天）保留草稿，下次还能恢复
+async function closePanel(force = false, keepDraft = false) {
     if (!force && isDirty() && !(await askConfirm('正文改了还没保存，确定关闭吗？'))) return;
+    if (keepDraft) saveDraftNow();
+    else clearDraft();
     clearTimeout(state.typingTimer);
     clearTimeout(state.diffTimer);
     state.target = null;
@@ -1025,6 +1303,7 @@ async function onSave() {
         $btn.removeClass('rs_off');
     }
     if (!ok) return;
+    clearDraft();
     if (t.closeAfterSave) {
         closePanel(true);
         return;
@@ -1140,24 +1419,27 @@ function bindPanelEvents() {
             $box.find('.rs_cliche_toggle').prop('checked', settings().clicheOn);
             $box.find('.rs_cliche_whole').prop('checked', settings().clicheWhole);
             $box.find('.rs_cliche_input').val(settings().clicheWords);
-            $box.toggle();
-            $('#rs_panel .rs_cliche_set').toggleClass('rs_on', $box.is(':visible'));
+            toggleBox('cliche');
         })
-        .on('change', '#rs_panel .rs_cliche_toggle', function () {
-            settings().clicheOn = this.checked;
-            $('#rs_cliche_on').prop('checked', this.checked);
+        .on('click', '#rs_panel .rs_find_btn', () => {
+            $('#rs_panel .rs_find_ex').val(settings().findExclude);
+            toggleBox('find');
+        })
+        .on('input', '#rs_panel .rs_find_ex', function () {
+            settings().findExclude = this.value;
             ctx().saveSettingsDebounced();
             renderBack();
-            renderRef();
         })
-        .on('input', '#rs_panel .rs_cliche_input', onClicheWordsInput)
-        .on('change', '#rs_panel .rs_cliche_whole', function () {
-            settings().clicheWhole = this.checked;
-            $('#rs_cliche_whole').prop('checked', this.checked);
-            ctx().saveSettingsDebounced();
-            renderBack();
-            renderRef();
-        });
+        .on('click', '#rs_panel .rs_nav_btn', () => toggleBox('nav'))
+        .on('click', '#rs_panel .rs_nav_item', function () { jumpToHeading(Number($(this).data('pos'))); })
+        .on('input', '#rs_panel .rs_find_q', renderBack)
+        .on('keydown', '#rs_panel .rs_find_q', e => { if (e.key === 'Enter') findNext(); })
+        .on('click', '#rs_panel .rs_find_next', findNext)
+        .on('click', '#rs_panel .rs_find_one', replaceOne)
+        .on('click', '#rs_panel .rs_find_all', replaceAll)
+        .on('change', '#rs_panel .rs_cliche_toggle', function () { setClicheSetting('clicheOn', this.checked); })
+        .on('change', '#rs_panel .rs_cliche_whole', function () { setClicheSetting('clicheWhole', this.checked); })
+        .on('input', '#rs_panel .rs_cliche_input', function () { setClicheSetting('clicheWords', this.value); });
 
     document.addEventListener('selectionchange', () => {
         const ta = document.querySelector('#rs_panel .rs_body_text');
@@ -1359,21 +1641,9 @@ function renderSettings() {
         $('#rs_ball_url').val('');
         setBallImage('');
     });
-    $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () {
-        settings().clicheOn = this.checked;
-        ctx().saveSettingsDebounced();
-        renderBack();
-    });
-    $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () {
-        settings().clicheWhole = this.checked;
-        ctx().saveSettingsDebounced();
-        renderBack();
-    });
-    $('#rs_cliche_words').val(s.clicheWords).on('input', function () {
-        settings().clicheWords = this.value;
-        ctx().saveSettingsDebounced();
-        renderBack();
-    });
+    $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () { setClicheSetting('clicheOn', this.checked); });
+    $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () { setClicheSetting('clicheWhole', this.checked); });
+    $('#rs_cliche_words').val(s.clicheWords).on('input', function () { setClicheSetting('clicheWords', this.value); });
     $('#rs_snap_keep').val(s.snapKeep).on('input', function () {
         settings().snapKeep = Math.max(2, parseInt(this.value) || DEFAULTS.snapKeep);
         ctx().saveSettingsDebounced();
@@ -1402,5 +1672,9 @@ jQuery(() => {
     c.eventSource.on(ev.CHAT_CHANGED, () => {
         pending = null;
         injectButtons();
+        if (state.target?.kind === 'msg') {
+            closePanel(true, true);
+            toastr.info('切换了聊天，楼层编辑面板已关闭');
+        }
     });
 });

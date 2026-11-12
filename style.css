@@ -65,7 +65,7 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--rs-line);
 }
@@ -162,6 +162,79 @@
 #rs_panel .rs_icon.rs_cliche_set.rs_on {
     opacity: 1;
     color: var(--rs-accent);
+}
+
+#rs_panel .rs_icon.rs_nav_btn.rs_on,
+#rs_panel .rs_icon.rs_find_btn.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
+}
+
+/* 目录 */
+#rs_panel .rs_nav_box {
+    display: none;
+    flex: none;
+    max-height: 35%;            /* 目录最多占面板多高，超出可以滑动 */
+    overflow-y: auto;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_nav_item {
+    padding: 7px 4px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#rs_panel .rs_nav_item:active {
+    background: var(--rs-line);
+}
+
+/* 查找替换 */
+#rs_panel .rs_find_box {
+    display: none;
+    flex: none;
+    padding: 8px 16px 6px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_find_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+#rs_panel .rs_find_row input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--rs-line) !important;
+    background: transparent !important;
+    color: var(--SmartThemeBodyColor) !important;
+    font-size: 14px;
+}
+
+#rs_panel .rs_find_row .menu_button {
+    flex: none;
+    margin: 0;
+    padding: 5px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+#rs_panel .rs_find_info {
+    flex: none;
+    font-size: 12px;
+    opacity: 0.6;
+    white-space: nowrap;
 }
 
 /* 面板里的八股词表 */
@@ -303,6 +376,7 @@
 
 /* 两层的排版必须完全一样，高亮才对得上 */
 #rs_panel .rs_body_back,
+#rs_panel .rs_body_measure,
 #rs_panel .rs_body_text {
     position: absolute !important;
     inset: 0;
@@ -331,6 +405,14 @@
     pointer-events: none;
 }
 
+/* 量位置用的隐形层 */
+#rs_panel .rs_body_measure {
+    z-index: -1;
+    visibility: hidden;
+    overflow-y: hidden !important;
+    pointer-events: none;
+}
+
 #rs_panel .rs_body_text {
     z-index: 1;
     resize: none;
@@ -352,6 +434,13 @@
 #rs_panel .rs_body_back .rs_add {
     color: transparent;
     background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); /* 新增句子的底色 */
+    border-radius: 3px;
+}
+
+/* 查找到的文字 */
+#rs_panel .rs_body_back .rs_find {
+    color: transparent;
+    background: rgba(80, 160, 255, 0.35);  /* 查找结果的底色 */
     border-radius: 3px;
 }
 
