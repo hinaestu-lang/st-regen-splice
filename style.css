@@ -643,20 +643,10 @@
     display: flex;
 }
 
-#rs_panel .rs_rd_bar .rs_rd_theme {
-    width: auto;
-    font-size: 14px;
-}
-
 #rs_panel .rs_rd_bar .rs_bar_title {
     font-size: 13px;
     font-weight: normal;
     opacity: 0.55;
-}
-
-#rs_panel .rs_rd_font {
-    font-size: 14px;
-    font-weight: 600;
 }
 
 #rs_panel .rs_icon.rs_rd_find_btn.rs_on {
@@ -692,30 +682,6 @@
     letter-spacing: 0.04em;
 }
 
-#rs_panel .rs_reader_body.rs_rd_sage {
-    --rd-bg: #d4ddd0;
-    --rd-text: #1f2d3b;
-    --rd-quote: #477443;
-    --rd-italic: #4b5a55;
-    --rd-muted: #7b8a80;
-}
-
-#rs_panel .rs_reader_body.rs_rd_dark {
-    --rd-bg: #1c1b21;
-    --rd-text: #ebe5d6;
-    --rd-quote: #c9a24f;
-    --rd-italic: #b9b3a5;
-    --rd-muted: #77756e;
-}
-
-#rs_panel .rs_reader_body.rs_rd_navy {
-    --rd-bg: #232f78;
-    --rd-text: #eef0fb;
-    --rd-quote: #ffffff;
-    --rd-italic: #a9b3e6;
-    --rd-muted: #7f8ac6;
-}
-
 #rs_panel .rs_reader_body.rs_rd_follow {
     --rd-bg: transparent;
     --rd-text: var(--SmartThemeBodyColor);
@@ -738,24 +704,31 @@
 }
 
 #rs_panel .rs_floor {
-    margin-bottom: 2.6em;       /* 楼与楼之间的距离 */
+    padding: 0.4em 0 1.6em;
+}
+
+/* 楼与楼之间的分隔线 */
+#rs_panel .rs_floor + .rs_floor,
+#rs_panel .rs_floor + .rs_rd_sign {
+    border-top: 1px solid color-mix(in srgb, var(--rd-muted) 35%, transparent);
+    padding-top: 2em;
 }
 
 #rs_panel .rs_floor_hidden {
     opacity: 0.62;              /* 已隐藏楼层的淡化程度 */
 }
 
+/* 头像、名字、日期竖着排 */
 #rs_panel .rs_floor_head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 1.1em;
+    margin-bottom: 1.4em;
+    line-height: 1.5;
 }
 
 #rs_panel .rs_floor_av {
-    width: 42px;
-    height: 42px;
-    flex: none;
+    display: block;
+    width: 2.6em;               /* 头像大小（跟着字号变） */
+    height: 2.6em;
+    margin-bottom: 0.8em;
     border-radius: 50%;
     object-fit: cover;
 }
@@ -773,9 +746,8 @@
 }
 
 #rs_panel .rs_floor_name {
-    font-size: 1em;
+    font-size: 1.1em;
     font-weight: 700;
-    line-height: 1.4;
 }
 
 #rs_panel .rs_floor_tag {
@@ -784,26 +756,116 @@
     border-radius: 6px;
     border: 1px solid var(--rd-muted);
     color: var(--rd-muted);
-    font-size: 0.65em;
+    font-size: 0.6em;
     font-weight: normal;
     vertical-align: middle;
 }
 
 #rs_panel .rs_floor_meta {
-    font-size: 0.72em;
+    font-size: 0.78em;
     color: var(--rd-muted);
-    line-height: 1.4;
 }
 
-#rs_panel .rs_floor p {
-    margin: 0 0 0.9em;
-    text-indent: 2em;           /* 段首缩进 */
-    font-weight: 500;
+#rs_panel .rs_floor_text p {
+    margin: 0 0 1em;
+}
+
+#rs_panel .rs_reader_body.rs_rd_indent .rs_floor_text p {
+    text-indent: 2em;
+}
+
+/* 每楼末尾的「/ 书名 · 第 N 楼」 */
+#rs_panel .rs_floor_src {
+    margin-top: 0.6em;
+    font-size: 0.82em;
+    color: var(--rd-muted);
+}
+
+/* 整页最底下的落款 */
+#rs_panel .rs_rd_sign {
+    padding-top: 1.6em;
+    font-size: 0.85em;
+    color: var(--rd-muted);
 }
 
 #rs_panel .rs_floor_empty {
     color: var(--rd-muted);
     text-indent: 0 !important;
+}
+
+/* ───── 阅读页的设置框 ───── */
+#rs_panel .rs_rd_set {
+    display: none;
+    flex: none;
+    max-height: 45dvh;
+    overflow-y: auto;
+    padding: 8px 16px 4px;
+    border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_rd_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    margin-bottom: 10px;
+}
+
+#rs_panel .rs_rd_label {
+    font-size: 13px;
+    opacity: 0.6;
+}
+
+#rs_panel .rs_rd_sw {
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 2px solid transparent;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#rs_panel .rs_rd_sw.rs_on {
+    border-color: var(--rs-accent);
+}
+
+#rs_panel .rs_rd_sw_follow {
+    border: 1px dashed var(--rs-line);
+}
+
+#rs_panel .rs_rd_color_item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+#rs_panel .rs_rd_color {
+    width: 38px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--rs-line);
+    border-radius: 8px;
+    background: none;
+    cursor: pointer;
+}
+
+#rs_panel .rs_rd_fontbtn {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+#rs_panel .rs_rd_fs {
+    min-width: 2em;
+    text-align: center;
+    font-size: 14px;
+}
+
+#rs_panel .rs_icon.rs_rd_set_btn.rs_on {
+    opacity: 1;
+    color: var(--rs-accent);
 }
 
 #rs_panel .rs_rq {

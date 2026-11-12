@@ -18,9 +18,15 @@ const DEFAULTS = {
     snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
     lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
     findExclude: '',   // 查找替换时跳过的标签名，空格隔开，比如 count think
-    readerTheme: 'paper', // 阅读页配色：paper 米白 / sage 青绿 / dark 夜黑 / navy 藏蓝 / follow 跟随酒馆主题
-    readerFont: 17,    // 阅读页字号（像素）
-    readerHide: 'think thinking', // 阅读页里整块不显示的标签，空格隔开；其他标签只去掉 <> 符号、保留里面的字
+    readerTheme: 'paper', // 阅读页配色预设：paper 米白 / sage 青绿 / dark 夜黑 / navy 藏蓝 / follow 跟随酒馆主题
+    readerColors: null, // 自己调过的颜色，在阅读页的设置里调，不用手改
+    readerFont: 19,    // 阅读页字号（像素）
+    readerIndent: false, // 段首空两格
+    readerShowTime: true, // 名字下面显示日期
+    readerBook: '',    // 书名：填了每楼末尾会显示「/ 书名 · 第 N 楼」
+    readerSign: '',    // 落款：显示在整页最底下
+    readerBody: 'content', // 只显示这个标签里的正文；没有这个标签的楼层显示全文
+    readerHide: 'think thinking', // 整块不显示的标签，空格隔开；其他标签只去掉 <> 符号、保留里面的字
     libMax: 500,       // 素材库最多存多少条，超出删掉最旧的
     clicheOn: true,    // 楼层编辑时是否标出八股词
     clicheWhole: true, // true = 把带八股词的整句标出来；false = 只标那几个字
@@ -961,7 +967,17 @@ function onToolbarAct(act) {
 const READER_CHUNK = 30; // 一次加载多少楼，点「加载更早」再往前加
 const reader = { from: 0, hits: [], cur: -1, undo: [] };
 
-const readerHideNames = () => String(settings().readerHide || '').split(/[\s,，、]+/).map(x => x.replace(/[<>/]/g, '')).filter(x => /^[\w-]+$/.test(x));
+// 「count think」「<count>，think」都认，只取标签名
+const tagNames = str => String(str || '').split(/[\s,，、]+/).map(x => x.replace(/[<>/]/g, '').trim()).filter(x => /^[\w-]+$/.test(x));
+
+// 阅读页配色预设：底色、正文、对话、斜体、次要文字（楼层号、日期）
+const READER_PRESETS = {
+    paper: { name: '米白', bg: '#f5f4ee', text: '#262626', quote: '#4f7d4a', italic: '#5a5a5a', muted: '#9b9a92' },
+    sage: { name: '青绿', bg: '#d4ddd0', text: '#1f2d3b', quote: '#477443', italic: '#4b5a55', muted: '#7b8a80' },
+    dark: { name: '夜黑', bg: '#1c1c21', text: '#ece3cc', quote: '#d4b26a', italic: '#b9b3a5', muted: '#8d877a' },
+    navy: { name: '藏蓝', bg: '#232f78', text: '#eef0fb', quote: '#ffffff', italic: '#a9b3e6', muted: '#8a94cf' },
+};
+const COLOR_KEYS = [['bg', '底色'], ['text', '正文'], ['quote', '对话'], ['italic', '斜体'], ['muted', '次要']];
 
 // 把原文转成显示用的文字：去掉要隐藏的标签整块、其他标签的 <> 记号、* 号（* 号之间的字显示成斜体）
 // 返回 { text, map, it, shown }：map[i] 是显示文字第 i 个字在原文里的位置，shown[j] 表示原文第 j 个字有没有显示
@@ -978,10 +994,30 @@ function readerDisplay(raw) {
             gone.fill(1, m.index, m.index + m[0].length);
         }
     };
-    readerHideNames().forEach(n => {
+    tagNames(settings().readerHide).forEach(n => {
         const e = escapeRe(n);
         cut(new RegExp(`<${e}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${e}\\s*>|$)`, 'gi'));
     });
+    // 有正文标签的楼层只留标签里面的字（tk 数、生成时间这些外面的都不要）
+    const body = tagNames(settings().readerBody)[0];
+    if (body) {
+        const e = escapeRe(body);
+        const re = new RegExp(`<${e}(?:\\s[^>]*)?>([\\s\\S]*?)(?:</${e}\\s*>|$)`, 'gid');
+        const keep = [];
+        let m;
+        while ((m = re.exec(raw))) {
+            if (!m[0]) {
+                re.lastIndex++;
+                continue;
+            }
+            keep.push(m.indices[1]);
+        }
+        if (keep.length) {
+            const outside = new Uint8Array(raw.length).fill(1);
+            keep.forEach(([a, b]) => outside.fill(0, a, b));
+            outside.forEach((v, j) => { if (v) gone[j] = 1; });
+        }
+    }
     cut(/<\/?[A-Za-z_][\w-]*(?:\s[^>]*)?\/?>/g);
 
     let text = '';
@@ -1013,7 +1049,10 @@ function floorAvatar(m) {
 function floorTime(m) {
     const t = m.send_date;
     if (!t) return '';
-    return typeof t === 'number' ? fmtTime(t) : String(t);
+    const d = new Date(t);
+    if (isNaN(d)) return String(t);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 const QUOTE_OPEN = '“「『"';
@@ -1073,37 +1112,74 @@ function floorHtml(id) {
         off += line.length + 1;
     });
 
+    const s = settings();
     const av = floorAvatar(m);
-    const head = `
-<div class="rs_floor_head">
-  ${av ? `<img class="rs_floor_av" src="${escapeHtml(av)}" alt="" loading="lazy" data-ch="${escapeHtml((m.name || '?').slice(0, 1))}">` : ''}
-  <div class="rs_floor_av rs_floor_av_none"${av ? ' hidden' : ''}>${escapeHtml((m.name || '?').slice(0, 1))}</div>
-  <div class="rs_floor_who">
+    const initial = escapeHtml((m.name || '?').slice(0, 1));
+    const time = s.readerShowTime ? floorTime(m) : '';
+    const book = String(s.readerBook || '').trim();
+    return `
+<section class="rs_floor ${m.is_system ? 'rs_floor_hidden' : ''}" data-id="${id}">
+  <div class="rs_floor_head">
+    ${av ? `<img class="rs_floor_av" src="${escapeHtml(av)}" alt="" loading="lazy">` : ''}
+    <div class="rs_floor_av rs_floor_av_none"${av ? ' hidden' : ''}>${initial}</div>
     <div class="rs_floor_name">${escapeHtml(m.name || '')}${m.is_system ? '<span class="rs_floor_tag">已隐藏</span>' : ''}</div>
-    <div class="rs_floor_meta">第 ${id} 楼　${escapeHtml(floorTime(m))}</div>
+    <div class="rs_floor_meta">第 ${id} 楼${time ? `　${escapeHtml(time)}` : ''}</div>
   </div>
-</div>`;
-    return `<section class="rs_floor ${m.is_system ? 'rs_floor_hidden' : ''}" data-id="${id}">${head}${body || '<p class="rs_floor_empty">（这一楼没有可显示的文字）</p>'}</section>`;
+  <div class="rs_floor_text">${body || '<p class="rs_floor_empty">（这一楼没有可显示的文字）</p>'}</div>
+  ${book ? `<div class="rs_floor_src">/ ${escapeHtml(book)} · 第 ${id} 楼</div>` : ''}
+</section>`;
+}
+
+const readerFontSize = () => Math.min(28, Math.max(13, parseInt(settings().readerFont) || DEFAULTS.readerFont));
+
+function readerColors() {
+    const s = settings();
+    if (s.readerTheme === 'follow') return null;
+    return { ...(READER_PRESETS[s.readerTheme] || READER_PRESETS.paper), ...(s.readerColors || {}) };
 }
 
 function applyReaderStyle() {
     const s = settings();
     const $b = $('#rs_panel .rs_reader_body');
-    $b.removeClass('rs_rd_paper rs_rd_sage rs_rd_dark rs_rd_navy rs_rd_follow').addClass(`rs_rd_${s.readerTheme}`);
-    $b.css('font-size', Math.min(26, Math.max(13, parseInt(s.readerFont) || DEFAULTS.readerFont)) + 'px');
-    $('#rs_panel .rs_rd_theme').val(s.readerTheme);
+    const colors = readerColors();
+    $b.toggleClass('rs_rd_follow', !colors).toggleClass('rs_rd_indent', !!s.readerIndent);
+    COLOR_KEYS.forEach(([k]) => $b[0].style.setProperty(`--rd-${k}`, colors ? colors[k] : ''));
+    $b.css('font-size', readerFontSize() + 'px');
+    $('#rs_panel .rs_rd_bar .rs_bar_title').text(String(s.readerBook || '').trim() || `共 ${ctx().chat.length} 楼`);
+    syncReaderSetUI();
+}
+
+// 让设置框里的控件显示当前的值
+function syncReaderSetUI() {
+    const s = settings();
+    const colors = readerColors();
+    $('#rs_panel .rs_rd_sw').each(function () { $(this).toggleClass('rs_on', this.dataset.p === s.readerTheme); });
+    COLOR_KEYS.forEach(([k]) => $(`#rs_panel .rs_rd_color[data-k="${k}"]`).val(colors ? colors[k] : '#888888'));
+    $('#rs_panel .rs_rd_fs').text(readerFontSize());
+    $('#rs_panel .rs_rd_indent_cb').prop('checked', !!s.readerIndent);
+    $('#rs_panel .rs_rd_time_cb').prop('checked', !!s.readerShowTime);
+    $('#rs_panel .rs_rd_text').each(function () {
+        if (document.activeElement !== this) this.value = s[this.dataset.k] ?? '';
+    });
+}
+
+function setReaderOption(key, value) {
+    settings()[key] = value;
+    ctx().saveSettingsDebounced();
+    applyReaderStyle();
 }
 
 function renderReader() {
     const chat = ctx().chat;
     let html = reader.from > 0 ? `<div class="rs_rd_more">加载更早的 ${Math.min(READER_CHUNK, reader.from)} 楼（前面还有 ${reader.from} 楼）</div>` : '';
     for (let id = reader.from; id < chat.length; id++) html += floorHtml(id);
+    const sign = String(settings().readerSign || '').trim();
+    if (sign) html += `<div class="rs_rd_sign">${escapeHtml(sign)}</div>`;
     clearSel();
     $('#rs_panel .rs_reader_body').html(html).find('img.rs_floor_av').on('error', function () {
         $(this).next('.rs_floor_av_none').prop('hidden', false);
         $(this).remove();
     });
-    $('#rs_panel .rs_rd_bar .rs_bar_title').text(`共 ${chat.length} 楼`);
 }
 
 function openReader() {
@@ -1454,18 +1530,36 @@ function ensureShell() {
     </div>
     <div class="rs_reader">
       <div class="rs_bar rs_rd_bar">
-        <select class="rs_rd_theme text_pole">
-          <option value="paper">米白</option>
-          <option value="sage">青绿</option>
-          <option value="dark">夜黑</option>
-          <option value="navy">藏蓝</option>
-          <option value="follow">跟随主题</option>
-        </select>
         <div class="rs_bar_title"></div>
-        <div class="rs_icon rs_rd_font" data-d="-1" title="字小一点">A-</div>
-        <div class="rs_icon rs_rd_font" data-d="1" title="字大一点">A+</div>
+        <div class="rs_icon rs_rd_set_btn fa-solid fa-sliders" title="排版和颜色"></div>
         <div class="rs_icon rs_rd_jump fa-solid fa-location-arrow" title="跳到第几楼"></div>
         <div class="rs_icon rs_rd_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
+      </div>
+      <div class="rs_rd_set">
+        <div class="rs_rd_row">
+          <span class="rs_rd_label">配色</span>
+          ${Object.entries(READER_PRESETS).map(([k, v]) => `<div class="rs_rd_sw" data-p="${k}" style="background:${v.bg};color:${v.quote}">${v.name}</div>`).join('')}
+          <div class="rs_rd_sw rs_rd_sw_follow" data-p="follow">跟随</div>
+        </div>
+        <div class="rs_rd_row rs_rd_colors">
+          ${COLOR_KEYS.map(([k, t]) => `<label class="rs_rd_color_item"><input type="color" class="rs_rd_color" data-k="${k}"><span>${t}</span></label>`).join('')}
+        </div>
+        <div class="rs_rd_row">
+          <span class="rs_rd_label">字号</span>
+          <div class="rs_icon rs_rd_fontbtn" data-d="-1">A-</div>
+          <span class="rs_rd_fs"></span>
+          <div class="rs_icon rs_rd_fontbtn" data-d="1">A+</div>
+          <label class="checkbox_label"><input type="checkbox" class="rs_rd_indent_cb"> 段首缩进</label>
+          <label class="checkbox_label"><input type="checkbox" class="rs_rd_time_cb"> 显示日期</label>
+        </div>
+        <div class="rs_find_row">
+          <input type="text" class="rs_rd_text" data-k="readerBook" placeholder="书名">
+          <input type="text" class="rs_rd_text" data-k="readerSign" placeholder="落款，显示在最底下">
+        </div>
+        <div class="rs_find_row">
+          <input type="text" class="rs_rd_text" data-k="readerBody" placeholder="只看这个标签里的正文，如 content">
+          <input type="text" class="rs_rd_text" data-k="readerHide" placeholder="不显示的标签，如 think">
+        </div>
       </div>
       <div class="rs_rd_find">
         <div class="rs_find_row">
@@ -1922,15 +2016,35 @@ function bindPanelEvents() {
             renderBack(); // 收起键盘后，插入位置标记停在最后点的地方
         })
         .on('click', '#rs_panel .rs_lib_btn', () => toggleBox('lib'))
-        .on('change', '#rs_panel .rs_rd_theme', function () {
-            settings().readerTheme = this.value;
-            ctx().saveSettingsDebounced();
-            applyReaderStyle();
+        .on('click', '#rs_panel .rs_rd_set_btn', function () {
+            const $set = $('#rs_panel .rs_rd_set').toggle();
+            $('#rs_panel .rs_rd_find').hide();
+            $('#rs_panel .rs_rd_find_btn').removeClass('rs_on');
+            $(this).toggleClass('rs_on', $set.is(':visible'));
+            syncReaderSetUI();
         })
-        .on('click', '#rs_panel .rs_rd_font', function () {
-            settings().readerFont = Math.min(26, Math.max(13, (parseInt(settings().readerFont) || DEFAULTS.readerFont) + Number(this.dataset.d)));
-            ctx().saveSettingsDebounced();
-            applyReaderStyle();
+        .on('click', '#rs_panel .rs_rd_sw', function () {
+            settings().readerColors = null; // 换预设时，自己调的颜色清掉
+            setReaderOption('readerTheme', this.dataset.p);
+        })
+        .on('input', '#rs_panel .rs_rd_color', function () {
+            const s = settings();
+            if (s.readerTheme === 'follow') s.readerTheme = 'paper'; // 跟随主题时没法单独调，改成在米白的基础上调
+            s.readerColors = { ...(s.readerColors || {}), [this.dataset.k]: this.value };
+            setReaderOption('readerColors', s.readerColors);
+        })
+        .on('click', '#rs_panel .rs_rd_fontbtn', function () {
+            setReaderOption('readerFont', readerFontSize() + Number(this.dataset.d));
+        })
+        .on('change', '#rs_panel .rs_rd_indent_cb', function () { setReaderOption('readerIndent', this.checked); })
+        .on('change', '#rs_panel .rs_rd_time_cb', function () {
+            setReaderOption('readerShowTime', this.checked);
+            renderReader();
+        })
+        .on('input', '#rs_panel .rs_rd_text', function () {
+            setReaderOption(this.dataset.k, this.value);
+            if (boxOpenReaderFind()) readerSearch(); // 显示范围变了，查找结果也要重算
+            renderReader();
         })
         .on('click', '#rs_panel .rs_rd_jump', jumpToFloor)
         .on('click', '#rs_panel .rs_rd_more', e => {
@@ -1938,6 +2052,8 @@ function bindPanelEvents() {
             loadEarlier();
         })
         .on('click', '#rs_panel .rs_rd_find_btn', function () {
+            $('#rs_panel .rs_rd_set').hide();
+            $('#rs_panel .rs_rd_set_btn').removeClass('rs_on');
             const $f = $('#rs_panel .rs_rd_find').toggle();
             $(this).toggleClass('rs_on', $f.is(':visible'));
             if ($f.is(':visible')) $('#rs_panel .rs_rd_q').trigger('focus');
