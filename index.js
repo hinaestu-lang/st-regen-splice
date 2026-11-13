@@ -1,38 +1,34 @@
-// 重生成拼接 v0.3.0
-// 1. 点「重新生成」时，把被删掉的旧回复塞回新回复的 swipes 里，左右翻就能看到
-// 2. 点悬浮球直接打开面板，左上角切换编辑楼层、角色卡、用户人设、世界书
-// 3. 角色卡 / 人设 / 世界书：可存多个命名版本随时切换；保存时自动留存改前改后，可在参考区对比
 
 const MODULE = 'regenSplice';
 
 const DEFAULTS = {
-    enabled: true,     // 是否在重新生成时保留旧版本
-    maxKeep: 20,       // 每条消息最多保留的版本数，超出会删掉最旧的（最小 2）
-    ball: true,        // 是否显示悬浮球
-    ballSize: 46,      // 悬浮球大小（像素，正方形是边长，原图形状是最长边），可填 30–300
-    ballPos: null,     // 悬浮球位置，拖动后自动记录，不用手动改
-    ballImage: '',     // 悬浮球图片：上传后自动生成，也可以填图片链接；留空用默认图标
-    ballImageSize: 600, // 上传图片压缩后最长边（像素），越大越清晰、占的空间越多
-    ballShape: 'square', // 有图片时的形状：square = 裁成正方形，original = 图片原形状
-    splitRatio: 0.4,   // 上半屏（参考）占面板的比例，拖动横条后自动记录
-    snapKeep: 30,      // 角色卡 / 人设 / 世界书每一项最多留存的存档数
-    lastKind: 'msg',   // 点悬浮球时默认打开哪一类，自动记录上次用的
-    findExclude: '',   // 查找替换时跳过的标签名，空格隔开，比如 count think
-    readerTheme: 'paper', // 阅读页配色预设：paper 米白 / sage 青绿 / dark 夜黑 / navy 藏蓝 / follow 跟随酒馆主题
-    readerColors: null, // 自己调过的颜色，在阅读页的设置里调，不用手改
-    readerFont: 19,    // 阅读页字号（像素）
-    readerIndent: false, // 段首空两格
-    readerShowTime: true, // 名字下面显示日期
-    readerMarkdown: true, // 按 Markdown 显示：**粗体** *斜体* ~~删除线~~，记号本身不显示
-    readerQuote: true, // 对话（引号里的字）用对话颜色
-    readerBook: '',    // 书名：填了每楼末尾会显示「/ 书名 · 第 N 楼」
-    readerSign: '',    // 落款：显示在书名下面一行
-    readerBody: 'content', // 只显示这个标签里的正文；没有这个标签的楼层显示全文
-    readerHide: 'think thinking', // 整块不显示的标签，空格隔开；其他标签只去掉 <> 符号、保留里面的字
-    libMax: 500,       // 素材库最多存多少条，超出删掉最旧的
-    clicheOn: true,    // 楼层编辑时是否标出八股词
-    clicheWhole: true, // true = 把带八股词的整句标出来；false = 只标那几个字
-    // 八股词表：一行一个；用 /.../ 包起来的是正则，可以匹配变体
+    enabled: true,
+    maxKeep: 20,
+    ball: true,
+    ballSize: 46,
+    ballPos: null,
+    ballImage: '',
+    ballImageSize: 600,
+    ballShape: 'square',
+    splitRatio: 0.4,
+    snapKeep: 30,
+    lastKind: 'msg',
+    findExclude: '',
+    readerTheme: 'paper',
+    readerColors: null,
+    readerFont: 19,
+    readerIndent: false,
+    readerShowTime: true,
+    readerMarkdown: true,
+    readerQuote: true,
+    readerHideCode: true,
+    readerBook: '',
+    readerSign: '',
+    readerBody: 'content',
+    readerHide: 'think thinking',
+    libMax: 500,
+    clicheOn: true,
+    clicheWhole: true,
     clicheWords: [
         '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
         '投石', '/投入.{0,8}(石子|石头)/', '/石子.{0,8}(湖|水)面/',
@@ -42,7 +38,6 @@ const DEFAULTS = {
 
 const ctx = () => SillyTavern.getContext();
 
-// 始终返回同一个对象，只补上缺的默认值（每次新建对象会导致设置写丢）
 function settings() {
     const es = ctx().extensionSettings;
     if (!es[MODULE] || typeof es[MODULE] !== 'object') es[MODULE] = {};
@@ -53,9 +48,7 @@ function settings() {
     return s;
 }
 
-// ───────────── 重新生成保留 ─────────────
-
-let pending = null; // 等待合并的旧版本 { index, swipes, info, msg }
+let pending = null;
 
 function onGenStarted(type, _opts, dryRun) {
     if (dryRun) return;
@@ -68,7 +61,7 @@ function onGenStarted(type, _opts, dryRun) {
 
     const sid = Number.isInteger(last.swipe_id) ? last.swipe_id : 0;
     const swipes = Array.isArray(last.swipes) && last.swipes.length ? [...last.swipes] : [last.mes];
-    swipes[sid] = last.mes; // 当前版本以显示内容为准（可能手动编辑过）
+    swipes[sid] = last.mes;
 
     const info = Array.isArray(last.swipe_info) ? structuredClone(last.swipe_info) : [];
     while (info.length < swipes.length) info.push({ send_date: last.send_date, extra: {} });
@@ -91,7 +84,6 @@ async function onCharRendered(messageId) {
     const newText = msg.mes;
     const newInfo = msg.swipe_info?.[msg.swipe_id ?? 0] ?? { send_date: msg.send_date, extra: structuredClone(msg.extra || {}) };
 
-    // 旧版本在前，新版本放最后；去重
     const swipes = [];
     const info = [];
     p.swipes.forEach((t, i) => {
@@ -117,20 +109,19 @@ async function onCharRendered(messageId) {
     await c.saveChat();
 }
 
-// 生成被中断且没有产出新消息时，把旧回复恢复回来
 function onGenEnded() {
     if (!pending) return;
     setTimeout(async () => {
         if (!pending) return;
         const c = ctx();
-        if (c.chat.length !== pending.index) return; // 已有新消息，交给渲染事件处理
+        if (c.chat.length !== pending.index) return;
         const p = pending;
         pending = null;
         c.chat.push(p.msg);
         c.addOneMessage(p.msg);
         await c.saveChat();
         toastr.info('生成未完成，已恢复上一版回复');
-    }, 500); // 等待渲染的延迟（毫秒），恢复误触发可调大
+    }, 500);
 }
 
 function refreshSwipeUI(id, msg) {
@@ -142,16 +133,10 @@ function refreshSwipeUI(id, msg) {
     }
 }
 
-// ───────────── 编辑面板（消息 / 角色卡 / 用户人设 / 世界书 共用） ─────────────
-// 上半屏：参考（消息是各个版本，其他是打开时的内容 + 历史存档），点句子插到下面
-// 下半屏：正文，直接点就能改
-// 中间横条可拖动调整上下比例
-
 const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div>';
-const UNDO_LIMIT = 100;   // 最多可撤销的步数
-const TYPING_PAUSE = 800; // 打字停顿多少毫秒算一步撤销
+const UNDO_LIMIT = 100;
+const TYPING_PAUSE = 800;
 
-// 角色卡可编辑字段：[字段名, 显示名, 酒馆编辑框选择器, 是否只在 data 里]
 const CHAR_FIELDS = [
     ['description', '描述', '#description_textarea', false],
     ['personality', '性格', '#personality_textarea', false],
@@ -180,12 +165,10 @@ function fmtTime(t) {
     return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// 断句：句号、问号、叹号、省略号后断开，后引号跟着前一句
 function splitSentences(line) {
     return line.match(/[^。！？!?…]*[。！？!?…]+[”’」』"']*|[^。！？!?…]+$/g) || [line];
 }
 
-// 把整段文字拆成句子集合，用来对比改前改后（整句完全一样才算没改）
 function sentenceSet(text) {
     const set = new Set();
     String(text).split('\n').forEach(line => {
@@ -194,7 +177,6 @@ function sentenceSet(text) {
     return set;
 }
 
-// 逐句走一遍，给出每句的 [开始, 结束]
 function eachSentence(text, fn) {
     let off = 0;
     String(text).split('\n').forEach(line => {
@@ -209,7 +191,6 @@ function eachSentence(text, fn) {
     });
 }
 
-// 正文里新增或改过的句子的范围
 function addedRanges(text, refSet) {
     const out = [];
     eachSentence(text, (sen, a, b) => {
@@ -217,8 +198,6 @@ function addedRanges(text, refSet) {
     });
     return out;
 }
-
-// ───── 存档（存在浏览器本地 IndexedDB，不占酒馆设置文件） ─────
 
 let dbPromise = null;
 function db() {
@@ -266,7 +245,6 @@ const putLib = arr => idbPut('library', arr);
 const getVers = key => idbGet('ver:' + key);
 const putVers = (key, arr) => idbPut('ver:' + key, arr);
 
-// 保存时自动存档（改前 + 改后）
 async function addSnaps(key, before, after) {
     let arr = await getSnaps(key);
     const push = text => {
@@ -279,7 +257,6 @@ async function addSnaps(key, before, after) {
     await idbPut(key, arr);
 }
 
-// 参考下拉框：打开时 → 自己存的版本（★）→ 自动存档
 async function buildRefs(key, initial) {
     const refs = [{ label: '打开时', text: initial }];
     (await getVers(key)).forEach(v => refs.push({ label: `★ ${v.name}`, text: v.text, verId: v.id }));
@@ -289,7 +266,6 @@ async function buildRefs(key, initial) {
     return refs;
 }
 
-// 酒馆自带弹窗（手机 app 里系统弹窗可能不显示）
 async function askConfirm(msg) {
     const c = ctx();
     if (c.callGenericPopup && c.POPUP_TYPE) {
@@ -307,8 +283,6 @@ async function askInput(msg, def = '') {
     }
     return window.prompt(msg, def);
 }
-
-// ───── 各种编辑对象 ─────
 
 function msgTarget(id) {
     const msg = ctx().chat[id];
@@ -362,44 +336,84 @@ function currentChar() {
     return c.characters[c.characterId] || null;
 }
 
+const ALT_PREVIEW = 14;
+
+async function postCharUpdate(body) {
+    const res = await fetch('/api/characters/merge-attributes', {
+        method: 'POST',
+        headers: ctx().getRequestHeaders(),
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) toastr.error('保存角色卡失败');
+    return res.ok;
+}
+
 async function charTarget(field = 'description') {
     const ch = currentChar();
     if (!ch) {
         toastr.warning('先打开一个角色的单人聊天');
         return null;
     }
-    const def = CHAR_FIELDS.find(f => f[0] === field) || CHAR_FIELDS[0];
-    const [f, , selector, dataOnly] = def;
-    const initial = String((dataOnly ? ch.data?.[f] : ch[f] ?? ch.data?.[f]) ?? '');
-    const key = `char:${ch.avatar}:${f}`;
-    const opts = CHAR_FIELDS.map(([k, label]) => `<option value="${k}" ${k === f ? 'selected' : ''}>${label}</option>`).join('');
+    const alts = Array.isArray(ch.data?.alternate_greetings) ? ch.data.alternate_greetings : [];
+    const altMatch = String(field).match(/^alt:(\d+|new)$/);
+    const altIndex = altMatch ? (altMatch[1] === 'new' ? alts.length : Number(altMatch[1])) : -1;
+    const isAlt = altIndex >= 0 && altIndex <= alts.length;
+    const def = isAlt ? null : CHAR_FIELDS.find(f => f[0] === field) || CHAR_FIELDS[0];
+    if (!isAlt) field = def[0];
+    else field = altIndex === alts.length ? 'alt:new' : `alt:${altIndex}`;
+
+    const initial = isAlt
+        ? String(alts[altIndex] ?? '')
+        : String((def[3] ? ch.data?.[def[0]] : ch[def[0]] ?? ch.data?.[def[0]]) ?? '');
+    const key = isAlt ? (field === 'alt:new' ? null : `char:${ch.avatar}:alt:${altIndex}`) : `char:${ch.avatar}:${def[0]}`;
+
+    const preview = t => {
+        const one = String(t).replace(/\s+/g, ' ').trim();
+        return one.length > ALT_PREVIEW ? one.slice(0, ALT_PREVIEW) + '…' : one || '（空）';
+    };
+    const opts = [
+        ...CHAR_FIELDS.map(([k, label]) => `<option value="${k}" ${k === field ? 'selected' : ''}>${label}</option>`),
+        `<optgroup label="备选开场白（${alts.length}）">`,
+        ...alts.map((t, i) => `<option value="alt:${i}" ${field === `alt:${i}` ? 'selected' : ''}>备选 ${i + 1}：${escapeHtml(preview(t))}</option>`),
+        `<option value="alt:new" ${field === 'alt:new' ? 'selected' : ''}>＋ 新建备选开场白</option>`,
+        '</optgroup>',
+    ].join('');
 
     return {
         kind: 'char',
+        field,
         subtitle: escapeHtml(ch.name),
         pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
         refs: await buildRefs(key, initial),
         key,
         ref: 0,
         initial,
-        saveLabel: '保存',
+        saveLabel: field === 'alt:new' ? '新建' : '保存',
         closeAfterSave: false,
-        save: async text => {
+        save: async function (text) {
+            if (isAlt) {
+                const list = [...(Array.isArray(ch.data?.alternate_greetings) ? ch.data.alternate_greetings : [])];
+                list[altIndex] = text;
+                if (!(await postCharUpdate({ avatar: ch.avatar, data: { alternate_greetings: list } }))) return false;
+                ch.data = ch.data || {};
+                ch.data.alternate_greetings = list;
+                if (field === 'alt:new') {
+                    this.field = `alt:${altIndex}`;
+                    toastr.success(`已新建备选开场白 ${altIndex + 1}`);
+                    return true;
+                }
+                await addSnaps(key, initial, text);
+                toastr.success(`备选开场白 ${altIndex + 1} 已保存`);
+                return true;
+            }
+            const [f, , selector, dataOnly] = def;
             const body = { avatar: ch.avatar, data: { [f]: text } };
             if (!dataOnly) body[f] = text;
-            const res = await fetch('/api/characters/merge-attributes', {
-                method: 'POST',
-                headers: ctx().getRequestHeaders(),
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) {
-                toastr.error('保存角色卡失败');
-                return false;
-            }
+            if (!(await postCharUpdate(body))) return false;
             ch.data = ch.data || {};
             ch.data[f] = text;
             if (!dataOnly) ch[f] = text;
-            if (selector) $(selector).val(text); // 同步酒馆自己的编辑框，避免被旧内容覆盖
+            if (selector) $(selector).val(text);
             await addSnaps(key, initial, text);
             toastr.success('角色卡已保存');
             return true;
@@ -427,7 +441,7 @@ async function personaTarget() {
         saveLabel: '保存',
         closeAfterSave: false,
         save: async text => {
-            $('#persona_description').val(text).trigger('input'); // 交给酒馆自己保存
+            $('#persona_description').val(text).trigger('input');
             await addSnaps(key, initial, text);
             toastr.success('用户人设已保存');
             return true;
@@ -496,7 +510,7 @@ ${wiToggleHtml(!entry.disable)}`,
             }
             fresh.entries[entry.uid].content = text;
             await ctx().saveWorldInfo(book, fresh, true);
-            try { ctx().reloadWorldInfoEditor?.(book, false); } catch { /* 编辑器没打开时忽略 */ }
+            try { ctx().reloadWorldInfoEditor?.(book, false); } catch { }
             await addSnaps(key, initial, text);
             toastr.success('世界书条目已保存');
             return true;
@@ -521,7 +535,7 @@ async function toggleWorldEntry() {
     }
     entry.disable = !entry.disable;
     await c.saveWorldInfo(t.book, fresh, true);
-    try { c.reloadWorldInfoEditor?.(t.book, false); } catch { /* 编辑器没打开时忽略 */ }
+    try { c.reloadWorldInfoEditor?.(t.book, false); } catch { }
 
     const on = !entry.disable;
     $('#rs_panel .rs_wi_toggle').replaceWith(wiToggleHtml(on));
@@ -530,42 +544,46 @@ async function toggleWorldEntry() {
     toastr.success(on ? '条目已启用' : '条目已禁用');
 }
 
-// ───── 八股词 ─────
+const CLICHE_GAP = '[^。！？!?\\n]{0,40}?';
 
-const CLICHE_GAP = '[^。！？!?\\n]{0,40}?'; // 通配符最多跨 40 个字，且不跨句
-
-let clicheCache = { src: null, re: null };
+let clicheCache = { src: null, re: null, entries: [] };
 const escapeRe = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function clicheRegex() {
     const src = String(settings().clicheWords || '');
     if (clicheCache.src === src) return clicheCache.re;
     const parts = [];
-    src.split(/\n/).map(x => x.trim()).filter(Boolean).forEach(w => {
+    const entries = [];
+    src.split(/\n/).map(x => x.trim()).filter(Boolean).forEach(line => {
+        const arrow = line.match(/^(.*?)\s*(?:→|=>)\s*(.*)$/);
+        const w = arrow ? arrow[1].trim() : line;
+        const to = arrow ? arrow[2] : null;
+        if (!w) return;
+        let pattern;
         const m = w.match(/^\/(.+)\/$/);
         if (m) {
             try {
                 new RegExp(m[1]);
-                parts.push(`(?:${m[1]})`);
+                pattern = m[1];
             } catch {
                 console.warn('[重生成拼接] 八股词正则写错了，已跳过：', w);
+                return;
             }
         } else {
-            // 「不是……而是」「因为*而」：…… 或 * 表示中间可以隔任意字
-            parts.push(w.split(/…+|\*/).map(escapeRe).join(CLICHE_GAP));
+            pattern = w.split(/…+|\*/).map(escapeRe).join(CLICHE_GAP);
         }
+        parts.push(`(?<c${entries.length}>${pattern})`);
+        entries.push({ pattern, to });
     });
-    clicheCache = { src, re: parts.length ? new RegExp(parts.join('|'), 'g') : null };
+    clicheCache = { src, re: parts.length ? new RegExp(parts.join('|'), 'g') : null, entries };
     return clicheCache.re;
 }
 
 const clicheActive = () => state.target?.kind === 'msg' && settings().clicheOn && !!clicheRegex();
 
-// 把文字转成带 <mark> 的 HTML
-// 算出要标出的范围 [[开始, 结束], ...]：按词，或者把命中的整句标出
-function clicheRanges(text) {
+function clicheHits(text) {
     const re = clicheRegex();
     if (!re) return [];
-    const words = [];
+    const hits = [];
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text))) {
@@ -573,8 +591,14 @@ function clicheRanges(text) {
             re.lastIndex++;
             continue;
         }
-        words.push([m.index, m.index + m[0].length]);
+        const k = Object.keys(m.groups).find(g => /^c\d+$/.test(g) && m.groups[g] !== undefined);
+        hits.push({ a: m.index, b: m.index + m[0].length, entry: clicheCache.entries[Number(k.slice(1))] });
     }
+    return hits;
+}
+
+function clicheRanges(text) {
+    const words = clicheHits(text).map(h => [h.a, h.b]);
     if (!settings().clicheWhole || !words.length) return words;
 
     const out = [];
@@ -584,7 +608,43 @@ function clicheRanges(text) {
     return out;
 }
 
-// 把 [[开始, 结束], ...] 范围包成 <mark>（参考区的八股高亮用）
+function fixAllCliche() {
+    const ta = bodyEl();
+    if (ta.readOnly) return;
+    const text = ta.value;
+    const hits = clicheHits(text);
+    if (!hits.length) {
+        toastr.info('正文里没有八股词');
+        return;
+    }
+    const ops = [];
+    let replaced = 0;
+    let removed = 0;
+    if (settings().clicheWhole) {
+        eachSentence(text, (sen, a, b) => {
+            if (hits.some(h => h.entry.to === null && h.a < b && h.b > a)) ops.push([a, b, '']);
+        });
+        removed = ops.length;
+    }
+    hits.forEach(h => {
+        if (ops.some(([a, b]) => h.a < b && h.b > a)) return;
+        if (h.entry.to === null) {
+            ops.push([h.a, h.b, '']);
+            removed++;
+        } else {
+            ops.push([h.a, h.b, text.slice(h.a, h.b).replace(new RegExp(h.entry.pattern), h.entry.to)]);
+            replaced++;
+        }
+    });
+    ops.sort((x, y) => y[0] - x[0]);
+    let out = text;
+    ops.forEach(([a, b, to]) => { out = out.slice(0, a) + to + out.slice(b); });
+    out = out.split('\n').filter((line, i, arr) => line.trim() || !(text.split('\n')[i]?.trim())).join('\n');
+    setBody(out, 0);
+    const what = settings().clicheWhole ? '句' : '处';
+    toastr.success([removed && `删掉 ${removed} ${what}`, replaced && `替换 ${replaced} 处`].filter(Boolean).join('，') + '，可以撤销');
+}
+
 function markRanges(text, ranges, cls) {
     let html = '';
     let last = 0;
@@ -608,7 +668,6 @@ function renderBack() {
     const text = ta.value;
     const isMsg = state.target?.kind === 'msg';
 
-    // 八股只在楼层里用
     $btn.toggle(isMsg);
     $('#rs_panel .rs_cliche_set').toggle(isMsg);
     if (!isMsg) {
@@ -622,7 +681,6 @@ function renderBack() {
     const find = boxOpen('find') ? findRanges(text) : null;
     if (find) updateFindInfo(find.length);
 
-    // 高亮层同一时间只画一种：查找 > 八股 > 改动对比
     let ranges = [];
     let cls = '';
     if (find?.length) {
@@ -634,12 +692,10 @@ function renderBack() {
         if (refText.trim()) [ranges, cls] = [addedRanges(text, sentenceSet(refText)), 'rs_add'];
     }
     const caret = state.caret ? Math.min(state.caret.s, text.length) : text.length;
-    // 输入框末尾是换行时会多显示一个空行，底板要补一个字符才对得上
     $back.html(backHtml(text, ranges, cls, caret) + (text.endsWith('\n') ? '\u200b' : ''));
     syncBackScroll();
 }
 
-// 高亮层的 HTML：按范围包 <mark>，并在插入位置放一条竖线
 const CARET_HTML = '<span class="rs_caret"></span>';
 function backHtml(text, ranges, cls, caret) {
     let html = '';
@@ -660,12 +716,9 @@ function backHtml(text, ranges, cls, caret) {
     return html;
 }
 
-// ───── 查找替换 ─────
-
 const findQuery = () => String($('#rs_panel .rs_find_q').val() ?? '');
 const findReplacement = () => String($('#rs_panel .rs_find_r').val() ?? '');
 
-// 排除标签：只写名字就行（content、count），写成 <count> 也认
 function excludeNames() {
     return String(settings().findExclude || '')
         .split(/[\s,，、]+/)
@@ -673,7 +726,6 @@ function excludeNames() {
         .filter(x => /^[\w-]+$/.test(x));
 }
 
-// 被排除的标签整块（含两边标签）所在的范围；没写结束标签的算到末尾
 function excludedSpans(text) {
     const spans = [];
     excludeNames().forEach(name => {
@@ -709,7 +761,6 @@ function updateFindInfo(count) {
     $('#rs_panel .rs_find_box .rs_find_info').text(findQuery() ? `${count} 处` : '');
 }
 
-// 选中第 i 个命中并滚到那里（高亮层里同一时间只有一种 mark，顺序一致）
 function selectHit(hits, i) {
     const ta = bodyEl();
     const [a, b] = hits[i];
@@ -722,10 +773,9 @@ function selectHit(hits, i) {
         syncBackScroll();
     };
     scrollToHit();
-    setTimeout(scrollToHit, 400); // 手机键盘弹出后面板会变矮，再对准一次
+    setTimeout(scrollToHit, 400);
 }
 
-// 从光标往后找下一个，到底了从头再来
 function nextIndex(hits) {
     const from = state.caret ? state.caret.e : 0;
     const i = hits.findIndex(h => h[0] >= from);
@@ -741,14 +791,13 @@ function findNext() {
     selectHit(hits, nextIndex(hits));
 }
 
-// 正文整体换成新内容（可撤销）
 function setBody(value, caretPos) {
     const ta = bodyEl();
     state.typing = false;
     pushUndo();
     ta.value = value;
     const pos = Math.min(caretPos, value.length);
-    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
+    try { ta.setSelectionRange(pos, pos); } catch { }
     state.caret = { s: pos, e: pos };
     state.last = snap();
     updateUndoButtons();
@@ -763,7 +812,7 @@ function replaceOne() {
     const sel = state.caret || { s: -1, e: -1 };
     const hit = hits.find(([a, b]) => a === sel.s && b === sel.e);
     if (!hit) {
-        findNext(); // 还没选中匹配项时，先跳到下一个
+        findNext();
         return;
     }
     const piece = findReplacement();
@@ -790,7 +839,6 @@ function replaceAll() {
     toastr.success(`已替换 ${hits.length} 处，可以撤销`);
 }
 
-// 查找、八股词表、素材库同一时间只开一个，省地方
 const BOXES = {
     find: ['.rs_find_box', '.rs_find_btn'],
     cliche: ['.rs_cliche_box', '.rs_cliche_set'],
@@ -810,10 +858,6 @@ function toggleBox(which) {
     renderBack();
 }
 
-// ───── 素材库 ─────
-// 参考区选中句子点「收藏」、或在正文里选中文字点「收藏选中」，都会存进来；点素材插到插入位置
-
-// 素材来源，比如「楼层 第 16 楼 版本 2」；where 不传就用参考区当前选的版本
 function sourceLabel(where) {
     const t = state.target;
     if (!t) return '';
@@ -875,10 +919,7 @@ function collectSelection() {
     collect(sel, sourceLabel('正文'));
 }
 
-// ───── 点句子选中 + 工具栏（参考区、阅读页共用） ─────
-// 点一句选中；接着点相邻的句子连成一段；点已选中的头尾句子就缩短；点别处取消
-
-let sel = null; // { box: 容器元素, g: 段落, a: 起, b: 止 }
+let sel = null;
 
 function selSpans() {
     if (!sel) return $();
@@ -921,7 +962,6 @@ function onSentenceTap(el) {
     placeToolbar();
 }
 
-// 工具栏贴在当前区域底部，不跟着句子跑，就不会挡住要点的下一句
 function placeToolbar() {
     const $box = $(sel.box);
     $box.find('.rs_tb').remove();
@@ -963,16 +1003,11 @@ function onToolbarAct(act) {
     if (act === 'edit') switchTarget(async () => msgTarget(floor));
 }
 
-// ───── 阅读页 ─────
-// 整个聊天像小说一样连着排，已隐藏的楼层也显示；可以选句收藏、复制、跳去编辑；可以查找替换
-
-const READER_CHUNK = 30; // 一次加载多少楼，点「加载更早」再往前加
+const READER_CHUNK = 30;
 const reader = { from: 0, hits: [], cur: -1, undo: [] };
 
-// 「count think」「<count>，think」都认，只取标签名
 const tagNames = str => String(str || '').split(/[\s,，、]+/).map(x => x.replace(/[<>/]/g, '').trim()).filter(x => /^[\w-]+$/.test(x));
 
-// 阅读页配色预设：底色、正文、对话、斜体、次要文字（楼层号、日期）
 const READER_PRESETS = {
     paper: { name: '米白', bg: '#f5f4ee', text: '#262626', quote: '#4f7d4a', italic: '#5a5a5a', muted: '#9b9a92' },
     sage: { name: '青绿', bg: '#d4ddd0', text: '#1f2d3b', quote: '#477443', italic: '#4b5a55', muted: '#7b8a80' },
@@ -981,8 +1016,6 @@ const READER_PRESETS = {
 };
 const COLOR_KEYS = [['bg', '底色'], ['text', '正文'], ['quote', '对话'], ['italic', '斜体'], ['muted', '次要']];
 
-// 把原文转成显示用的文字：去掉要隐藏的标签整块、其他标签的 <> 记号、Markdown 记号
-// 返回 { text, map, fmt, shown }：map[i] 是显示文字第 i 个字在原文里的位置，shown[j] 表示原文第 j 个字有没有显示
 function readerDisplay(raw) {
     raw = String(raw ?? '');
     const gone = new Uint8Array(raw.length);
@@ -1000,7 +1033,6 @@ function readerDisplay(raw) {
         const e = escapeRe(n);
         cut(new RegExp(`<${e}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${e}\\s*>|$)`, 'gi'));
     });
-    // 有正文标签的楼层只留标签里面的字（tk 数、生成时间这些外面的都不要）
     const body = tagNames(settings().readerBody)[0];
     if (body) {
         const e = escapeRe(body);
@@ -1020,11 +1052,12 @@ function readerDisplay(raw) {
             outside.forEach((v, j) => { if (v) gone[j] = 1; });
         }
     }
+    if (settings().readerHideCode) cut(/```[\s\S]*?(?:```|$)/g);
     cut(/<\/?[A-Za-z_][\w-]*(?:\s[^>]*)?\/?>/g);
 
     let text = '';
     const map = [];
-    const fmt = []; // 每个字的格式：1 斜体、2 粗体、4 删除线
+    const fmt = [];
     const shown = new Uint8Array(raw.length);
     const md = settings().readerMarkdown;
     let f = 0;
@@ -1073,12 +1106,10 @@ function floorTime(m) {
 const QUOTE_OPEN = '“「『"';
 const QUOTE_CLOSE = '”」』"';
 
-// 一楼的 HTML：头像、名字、楼层号，正文按段落和句子排；对话染色、*斜体*、查找结果高亮
 function floorHtml(id) {
     const m = ctx().chat[id];
     if (!m) return '';
     const d = readerDisplay(m.mes);
-    // 这一楼里的查找结果，换算成显示文字的位置
     const hitAt = new Int32Array(d.text.length).fill(-1);
     reader.hits.forEach((h, hi) => {
         if (h.id !== id) return;
@@ -1108,7 +1139,6 @@ function floorHtml(id) {
                 for (let k = 0; k < sen.length; k++) {
                     const ch = sen[k];
                     const idx = pos + k;
-                    // 引号本身也算对话；英文 " 不分开合，第一个开、第二个合
                     let q = inQuote;
                     if (!inQuote && QUOTE_OPEN.includes(ch)) inQuote = q = true;
                     else if (inQuote && QUOTE_CLOSE.includes(ch)) inQuote = false;
@@ -1166,17 +1196,14 @@ function applyReaderStyle() {
     syncReaderSetUI();
 }
 
-// rgb(…) 转成取色器要的 #rrggbb
 function toHex(css) {
     css = String(css);
     const m = css.match(/-?\d*\.?\d+/g);
     if (!m || m.length < 3) return '#888888';
-    // 混色出来的颜色是 color(srgb 0.1 0.2 0.3) 这种 0～1 的写法
     const scale = css.startsWith('color(') ? 255 : 1;
     return '#' + m.slice(0, 3).map(x => Math.max(0, Math.min(255, Math.round(Number(x) * scale))).toString(16).padStart(2, '0')).join('');
 }
 
-// 跟随主题时从页面上读出实际颜色
 function computedReaderColors() {
     const $b = $('#rs_panel .rs_reader_body');
     if (!$b.length) return null;
@@ -1192,7 +1219,6 @@ function computedReaderColors() {
     return { bg: toHex(bg), text: probe('text'), quote: probe('quote'), italic: probe('italic'), muted: probe('muted') };
 }
 
-// 让设置框里的控件显示当前的值
 function syncReaderSetUI() {
     const s = settings();
     const colors = readerColors() || computedReaderColors();
@@ -1235,7 +1261,7 @@ function openReader() {
     if (boxOpenReaderFind()) readerSearch();
     renderReader();
     const body = $('#rs_panel .rs_reader_body')[0];
-    body.scrollTop = body.scrollHeight; // 停在最新一楼
+    body.scrollTop = body.scrollHeight;
 }
 
 function loadEarlier() {
@@ -1243,10 +1269,9 @@ function loadEarlier() {
     const before = body.scrollHeight - body.scrollTop;
     reader.from = Math.max(0, reader.from - READER_CHUNK);
     renderReader();
-    body.scrollTop = body.scrollHeight - before; // 保持在原来看的位置
+    body.scrollTop = body.scrollHeight - before;
 }
 
-// 确保第 id 楼已经加载，然后滚过去
 function scrollToFloor(id, hitIndex) {
     if (id < reader.from) {
         reader.from = Math.max(0, id - 3);
@@ -1271,8 +1296,6 @@ async function jumpToFloor() {
     }
     scrollToFloor(id);
 }
-
-// ── 阅读页的查找替换：在原文里找，跳过排除的标签，也跳过没显示出来的部分（比如标签名本身） ──
 
 const boxOpenReaderFind = () => $('#rs_panel .rs_rd_find').is(':visible');
 const rdQuery = () => String($('#rs_panel .rs_rd_q').val() ?? '');
@@ -1315,7 +1338,6 @@ function readerNext() {
     showHit((reader.cur + 1) % reader.hits.length);
 }
 
-// 改一楼的原文（当前显示的那个版本）
 function setFloorText(id, text) {
     const c = ctx();
     const m = c.chat[id];
@@ -1338,12 +1360,11 @@ async function readerReplace(all) {
         targets = reader.hits;
     } else {
         if (reader.cur < 0) {
-            readerNext(); // 先跳到第一处，看清楚再替换
+            readerNext();
             return;
         }
         targets = [reader.hits[reader.cur]];
     }
-    // 按楼分组，从后往前替换，前面的位置不会被影响
     const byFloor = new Map();
     targets.forEach(h => byFloor.set(h.id, [...(byFloor.get(h.id) || []), h]));
     const batch = [];
@@ -1362,7 +1383,6 @@ async function readerReplace(all) {
     if (all) {
         toastr.success(`已替换 ${targets.length} 处`);
     } else {
-        // 跳到被替换那处后面的下一个
         const next = reader.hits.findIndex(h => h.id > last.id || (h.id === last.id && h.a >= last.a + rep.length));
         if (next >= 0) showHit(next);
         else scrollToFloor(last.id);
@@ -1383,9 +1403,7 @@ async function readerUndo() {
     toastr.success('已撤销上一次替换');
 }
 
-// ───── 草稿自动恢复（存在本机浏览器里） ─────
-
-const DRAFT_DELAY = 600; // 停止输入多少毫秒后记一次草稿
+const DRAFT_DELAY = 600;
 let draftTimer = 0;
 
 function draftStoreKey() {
@@ -1400,7 +1418,7 @@ function saveDraftNow() {
     try {
         if (isDirty()) localStorage.setItem(k, JSON.stringify({ text: bodyEl().value, base: state.target.initial, time: Date.now() }));
         else localStorage.removeItem(k);
-    } catch { /* 存储满了之类，忽略 */ }
+    } catch { }
 }
 
 function saveDraftSoon() {
@@ -1412,7 +1430,7 @@ function clearDraft() {
     clearTimeout(draftTimer);
     const k = draftStoreKey();
     if (k) {
-        try { localStorage.removeItem(k); } catch { /* 忽略 */ }
+        try { localStorage.removeItem(k); } catch { }
     }
 }
 
@@ -1420,7 +1438,7 @@ async function offerDraft() {
     const k = draftStoreKey();
     if (!k) return;
     let d = null;
-    try { d = JSON.parse(localStorage.getItem(k) || 'null'); } catch { /* 坏数据当作没有 */ }
+    try { d = JSON.parse(localStorage.getItem(k) || 'null'); } catch { }
     if (!d || typeof d.text !== 'string' || d.text === state.target.initial) return;
     const note = d.base !== state.target.initial ? '（原文之后在别处改过）' : '';
     if (await askConfirm(`有一份 ${fmtTime(d.time)} 没保存的修改${note}，要恢复吗？`)) {
@@ -1431,13 +1449,11 @@ async function offerDraft() {
     }
 }
 
-// 正文内容变了之后统一调用
 function afterEdit() {
     renderBack();
     saveDraftSoon();
 }
 
-// 八股设置统一从这里改：同步面板和扩展设置两处的控件，再刷新高亮
 function setClicheSetting(key, value) {
     settings()[key] = value;
     ctx().saveSettingsDebounced();
@@ -1450,7 +1466,6 @@ function setClicheSetting(key, value) {
     }
 }
 
-// 点「八股 N」：跳到下一个八股词并选中，直接打字就能替换
 function jumpToNextCliche() {
     if (!settings().clicheOn) {
         setClicheSetting('clicheOn', true);
@@ -1463,7 +1478,7 @@ function jumpToNextCliche() {
         toastr.info('正文里没有八股词了');
         return;
     }
-    if (boxOpen('find')) toggleBox('find'); // 关掉查找，让高亮层显示八股
+    if (boxOpen('find')) toggleBox('find');
     selectHit(hits, nextIndex(hits));
 }
 
@@ -1479,8 +1494,6 @@ function scheduleBack() {
     backRaf = requestAnimationFrame(afterEdit);
 }
 
-// ───── 面板 ─────
-
 const state = {
     target: null,
     ref: 0,
@@ -1495,7 +1508,7 @@ const state = {
     diffTimer: null,
 };
 
-let gripDrag = null; // 正在拖动中间横条时的起点
+let gripDrag = null;
 
 const bodyEl = () => $('#rs_panel .rs_body_text')[0];
 const snap = () => {
@@ -1568,7 +1581,8 @@ function ensureShell() {
         <label class="checkbox_label"><input type="checkbox" class="rs_cliche_toggle"> 标出八股词</label>
         <label class="checkbox_label"><input type="checkbox" class="rs_cliche_whole"> 整句标出</label>
       </div>
-      <textarea class="rs_cliche_input" rows="4" spellcheck="false" placeholder="一行一个；中间隔字用 ……，比如 不是……而是"></textarea>
+      <textarea class="rs_cliche_input" rows="4" spellcheck="false" placeholder="一行一个；中间隔字用 ……，比如 不是……而是&#10;想替换而不是删掉就写：极其 → 很"></textarea>
+      <div class="menu_button rs_cliche_fix">一键处理全部八股</div>
     </div>
     <div class="rs_reader">
       <div class="rs_bar rs_rd_bar">
@@ -1597,6 +1611,7 @@ function ensureShell() {
         <div class="rs_rd_row">
           <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerMarkdown"> Markdown（**粗体** *斜体* ~~删除线~~）</label>
           <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerQuote"> 对话染色</label>
+          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerHideCode"> 隐藏代码块</label>
         </div>
         <div class="rs_find_row">
           <input type="text" class="rs_rd_text" data-k="readerBook" placeholder="书名">
@@ -1637,9 +1652,8 @@ function ensureShell() {
     fitToViewport();
 }
 
-// 键盘弹出时，把面板缩到键盘上方的可见区域里，而不是整个被顶上去
-const KEYBOARD_MIN = 120; // 可见高度比窗口少这么多像素，就当作键盘开着
-const KEYBOARD_REF_RATIO = 0.2; // 键盘开着时参考区最多占面板的比例，正文多留点地方
+const KEYBOARD_MIN = 120;
+const KEYBOARD_REF_RATIO = 0.2;
 
 function fitToViewport() {
     const ov = document.getElementById('rs_overlay');
@@ -1820,7 +1834,7 @@ function applySnap(sn) {
     const ta = bodyEl();
     ta.value = sn.v;
     state.caret = { s: sn.s, e: sn.e };
-    try { ta.setSelectionRange(sn.s, sn.e); } catch { /* 忽略 */ }
+    try { ta.setSelectionRange(sn.s, sn.e); } catch { }
     state.last = snap();
     if (state.diff) renderRef();
     afterEdit();
@@ -1846,13 +1860,13 @@ function insertSentence(text) {
     ta.value = val.slice(0, s) + text + val.slice(e);
     const pos = s + text.length;
     state.caret = { s: pos, e: pos };
-    try { ta.setSelectionRange(pos, pos); } catch { /* 忽略 */ }
+    try { ta.setSelectionRange(pos, pos); } catch { }
     state.last = { v: ta.value, s: pos, e: pos };
     renderRef();
     updateUndoButtons();
     afterEdit();
 
-    const wrap = ta.parentElement; // 输入框背景被强制透明，闪烁放在外层
+    const wrap = ta.parentElement;
     wrap.classList.remove('rs_flash');
     void wrap.offsetWidth;
     wrap.classList.add('rs_flash');
@@ -1908,7 +1922,6 @@ function onGripUp() {
     ctx().saveSettingsDebounced();
 }
 
-// keepDraft：不是用户主动放弃时（比如切换聊天）保留草稿，下次还能恢复
 async function closePanel(force = false, keepDraft = false) {
     if (!force && isDirty() && !(await askConfirm('正文改了还没保存，确定关闭吗？'))) return;
     if (keepDraft) saveDraftNow();
@@ -1953,24 +1966,20 @@ async function onSave() {
         closePanel(true);
         return;
     }
-    // 留在面板里，刷新存档列表
     t.initial = text;
     reloadCurrent();
 }
 
 async function reloadCurrent() {
     const t = state.target;
-    if (t.kind === 'char') showTarget(await charTarget($('#rs_panel .rs_pick[data-pick="char"]').val()));
+    if (t.kind === 'char') showTarget(await charTarget(t.field));
     else if (t.kind === 'persona') showTarget(await personaTarget());
     else if (t.kind === 'world') showTarget(await worldTarget(t.book, $('#rs_panel .rs_pick[data-pick="entry"]').val()));
 }
 
-// 对外入口
 function openPanel(id) {
     showTarget(msgTarget(id));
 }
-
-// ───── 按类型打开 ─────
 
 const LOADERS = {
     msg: async () => {
@@ -1993,7 +2002,6 @@ const LOADERS = {
     },
 };
 
-// 点悬浮球：打开上次用的那一类；打不开就依次试其他类
 async function openFromBall() {
     if ($('#rs_overlay').length) return;
     const first = settings().lastKind in LOADERS ? settings().lastKind : 'msg';
@@ -2059,7 +2067,7 @@ function bindPanelEvents() {
         .on('focus', '#rs_panel .rs_body_text', function () { this.parentElement.classList.add('rs_focus'); })
         .on('blur', '#rs_panel .rs_body_text', function () {
             this.parentElement.classList.remove('rs_focus');
-            renderBack(); // 收起键盘后，插入位置标记停在最后点的地方
+            renderBack();
         })
         .on('click', '#rs_panel .rs_lib_btn', () => toggleBox('lib'))
         .on('click', '#rs_panel .rs_rd_set_btn', function () {
@@ -2070,13 +2078,12 @@ function bindPanelEvents() {
             syncReaderSetUI();
         })
         .on('click', '#rs_panel .rs_rd_sw', function () {
-            settings().readerColors = null; // 换预设时，自己调的颜色清掉
+            settings().readerColors = null;
             setReaderOption('readerTheme', this.dataset.p);
         })
         .on('input', '#rs_panel .rs_rd_color', function () {
             const s = settings();
             if (s.readerTheme === 'follow') {
-                // 跟随主题时，以主题现在的颜色为底，只改这一个
                 s.readerColors = computedReaderColors();
                 s.readerTheme = 'paper';
             }
@@ -2093,12 +2100,12 @@ function bindPanelEvents() {
         })
         .on('change', '#rs_panel .rs_rd_cb', function () {
             setReaderOption(this.dataset.k, this.checked);
-            if (boxOpenReaderFind()) readerSearch(); // 记号显示与否会影响能找到的内容
+            if (boxOpenReaderFind()) readerSearch();
             renderReader();
         })
         .on('input', '#rs_panel .rs_rd_text', function () {
             setReaderOption(this.dataset.k, this.value);
-            if (boxOpenReaderFind()) readerSearch(); // 显示范围变了，查找结果也要重算
+            if (boxOpenReaderFind()) readerSearch();
             renderReader();
         })
         .on('click', '#rs_panel .rs_rd_jump', jumpToFloor)
@@ -2157,6 +2164,7 @@ function bindPanelEvents() {
             $box.find('.rs_cliche_input').val(settings().clicheWords);
             toggleBox('cliche');
         })
+        .on('click', '#rs_panel .rs_cliche_fix', fixAllCliche)
         .on('click', '#rs_panel .rs_find_btn', () => {
             $('#rs_panel .rs_find_ex').val(settings().findExclude);
             toggleBox('find');
@@ -2181,9 +2189,7 @@ function bindPanelEvents() {
     });
 }
 
-// ───────────── 悬浮球 ─────────────
-
-const DRAG_THRESHOLD = 6; // 移动超过多少像素算拖动（否则算点击）
+const DRAG_THRESHOLD = 6;
 
 function lastAiIndex() {
     const chat = ctx().chat;
@@ -2219,7 +2225,6 @@ function renderBall() {
     if (s.ballImage && s.ballShape !== 'original') {
         $b.addClass('rs_ball_img').css('background-image', `url("${String(s.ballImage).replace(/"/g, '%22')}")`);
     } else if (s.ballImage) {
-        // 原形状：不裁剪、不加底色和边框，透明的地方就是透明
         $b.addClass('rs_ball_raw').css({ width: 'auto', height: 'auto' });
         $('<img>', { src: s.ballImage, draggable: false, alt: '' })
             .css({ maxWidth: s.ballSize + 'px', maxHeight: s.ballSize + 'px' })
@@ -2229,7 +2234,6 @@ function renderBall() {
         $b.addClass('fa-solid fa-pen-nib');
     }
 
-    // 默认位置：右侧偏下
     const pos = s.ballPos || { x: window.innerWidth - s.ballSize - 12, y: window.innerHeight * 0.6 };
     placeBall(pos.x, pos.y);
 
@@ -2264,7 +2268,6 @@ function renderBall() {
     el.addEventListener('pointercancel', () => { drag = null; });
 }
 
-// 把上传的图片按比例压缩，保留透明背景，存进设置里
 function imageToDataUrl(file) {
     return new Promise((res, rej) => {
         const reader = new FileReader();
@@ -2286,8 +2289,6 @@ function imageToDataUrl(file) {
         reader.readAsDataURL(file);
     });
 }
-
-// ───────────── 设置面板 ─────────────
 
 function renderSettings() {
     const s = settings();
@@ -2383,8 +2384,6 @@ function renderSettings() {
         ctx().saveSettingsDebounced();
     });
 }
-
-// ───────────── 初始化 ─────────────
 
 jQuery(() => {
     const c = ctx();
