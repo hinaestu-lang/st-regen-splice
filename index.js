@@ -623,16 +623,6 @@ function sentenceAtTap(e, textEl) {
         sentence,
         nth: countOf(before.toString(), sentence),
         range: rangeOf(scope, a, b),
-        scope,
-        block: full,
-        blockNth: countOf(full.slice(0, a), sentence),
-        blockStart: (() => {
-            const r = document.createRange();
-            r.setStart(textEl, 0);
-            const p0 = nodeAtOffset(scope, 0);
-            if (p0) r.setEnd(p0.node, p0.offset);
-            return r.toString();
-        })(),
     };
 }
 
@@ -664,8 +654,8 @@ const INLINE_UNDO_PAUSE = 600;
 function endInlineEdit(restore) {
     if (!tap) return;
     clearTimeout(tap.timer);
-    tap.box?.remove();
-    if (restore) $(tap.scope).show();
+    if (restore && tap.box?.isConnected) tap.box.replaceWith(tap.frag);
+    else tap.box?.remove();
     tap = null;
 }
 
@@ -732,21 +722,13 @@ function onMessageTap(e) {
     if (!Number.isInteger(id) || !m) return;
     const hit = sentenceAtTap(e, textEl);
     if (!hit) return;
-    const useBlock = hit.scope !== textEl && hit.block.trim();
-    const para = useBlock ? locateInRaw(m.mes, hit.block.trim(), countOf(hit.blockStart, hit.block.trim())) : null;
-    const span = para || locateInRaw(m.mes, hit.sentence, hit.nth);
+    const span = hit.range && locateInRaw(m.mes, hit.sentence, hit.nth);
     if (!span) {
         toastr.info('这句被正则改过显示，对不上原文，请用整楼编辑');
         return;
     }
     const [a, b] = span;
     const original = m.mes.slice(a, b);
-    let selA = 0;
-    let selB = original.length;
-    if (para) {
-        const inner = locateInRaw(original, hit.sentence, hit.blockNth);
-        if (inner) [selA, selB] = inner;
-    }
 
     const $box = $(`
 <div class="rs_inline_box">
@@ -760,19 +742,15 @@ function onMessageTap(e) {
   </div>
   <textarea class="rs_inline_ta" spellcheck="false"></textarea>
 </div>`);
-    const scope = useBlock ? hit.scope : null;
-    if (scope) {
-        $(scope).hide().after($box);
-    } else {
-        $(textEl).before($box);
-    }
+    const frag = hit.range.extractContents();
+    hit.range.insertNode($box[0]);
     const ta = $box.find('.rs_inline_ta')[0];
     ta.value = original;
-    tap = { id, a, b, raw: m.mes, original, ta, box: $box[0], scope, undo: [{ v: original, s: selA, e: selB }], redo: [], timer: 0 };
+    tap = { id, a, b, raw: m.mes, original, ta, box: $box[0], frag, undo: [{ v: original, s: original.length, e: original.length }], redo: [], timer: 0 };
     fitInline();
     updateInlineButtons();
     ta.focus({ preventScroll: true });
-    ta.setSelectionRange(selA, selB);
+    ta.setSelectionRange(original.length, original.length);
 }
 
 async function confirmInlineEdit() {

@@ -968,7 +968,9 @@
 }
 
 .rs_inline_box {
+    display: block;
     margin: 4px 0 8px;
+    text-indent: 0;
 }
 
 .rs_inline_tools {
