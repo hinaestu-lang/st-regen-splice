@@ -318,7 +318,13 @@ function msgTarget(id) {
     const cur = Number.isInteger(msg.swipe_id) ? msg.swipe_id : 0;
     versions[cur] = msg.mes;
     let ref = cur > 0 ? cur - 1 : versions.length - 1;
-    if (versions.length === 1) ref = 0;
+    const chat = ctx().chat;
+    const floors = chat
+        .map((m, i) => ({ m, i }))
+        .filter(({ m, i }) => i !== id && m && String(m.mes ?? '').trim())
+        .sort((x, y) => Math.abs(x.i - id) - Math.abs(y.i - id) || y.i - x.i)
+        .map(({ m, i }) => ({ label: `第 ${i} 楼 ${m.name || ''}${m.is_system ? '（已隐藏）' : ''}`, text: splitBody(m.mes).body, group: '其他楼层' }));
+    if (versions.length === 1) ref = floors.length ? 1 : 0;
     const parts = splitBody(msg.mes);
     return {
         kind: 'msg',
@@ -326,7 +332,10 @@ function msgTarget(id) {
         draftKey: `msg:${ctx().getCurrentChatId?.() ?? ''}:${id}${parts.pre || parts.post ? ':body' : ''}`,
         subtitle: `第 ${id} 楼`,
         pickers: '',
-        refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: splitBody(t).body })),
+        refs: [
+            ...versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: splitBody(t).body, group: '这一楼的版本' })),
+            ...floors,
+        ],
         ref,
         initial: parts.body,
         bodyOnly: !!(parts.pre || parts.post),
@@ -2016,6 +2025,7 @@ function ensureShell() {
         <option value="reader">阅读</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
+      <div class="rs_ball_toggle" title="显示或隐藏悬浮球"><span>悬浮球</span><i></i></div>
       <div class="rs_icon rs_close fa-solid fa-xmark" title="关闭"></div>
     </div>
     <div class="rs_pickers"></div>
@@ -2029,9 +2039,9 @@ function ensureShell() {
     <div class="rs_ref_pane"></div>
     <div class="rs_grip"><span></span></div>
     <div class="rs_bar">
-      <div class="rs_bar_title">正文</div>
       <div class="rs_bodyonly" title="只编辑正文 / 编辑全文"></div>
       <div class="rs_cliche" title="跳到下一个八股词"></div>
+      <div class="rs_bar_spacer"></div>
       <div class="rs_icon rs_cliche_set fa-solid fa-list-ul" title="编辑八股词表"></div>
       <div class="rs_icon rs_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
       <div class="rs_icon rs_lib_btn fa-solid fa-star" title="素材库"></div>
@@ -2133,6 +2143,7 @@ function ensureShell() {
   </div>
 </div>`);
     bodyEl().addEventListener('scroll', syncBackScroll, { passive: true });
+    updateBallToggle();
     window.visualViewport?.addEventListener('resize', fitToViewport);
     window.visualViewport?.addEventListener('scroll', fitToViewport);
     fitToViewport();
@@ -2217,7 +2228,17 @@ async function switchTarget(loader) {
 }
 
 function fillRefSelect(idx) {
-    const html = state.target.refs.map((r, i) => `<option value="${i}">${escapeHtml(r.label)}</option>`).join('');
+    let html = '';
+    let group = null;
+    state.target.refs.forEach((r, i) => {
+        if ((r.group || null) !== group) {
+            if (group) html += '</optgroup>';
+            group = r.group || null;
+            if (group) html += `<optgroup label="${escapeHtml(group)}">`;
+        }
+        html += `<option value="${i}">${escapeHtml(r.label)}</option>`;
+    });
+    if (group) html += '</optgroup>';
     $('#rs_panel .rs_ref').html(html).val(String(idx));
 }
 
@@ -2503,6 +2524,11 @@ async function openFromBall() {
 
 function bindPanelEvents() {
     $(document)
+        .on('click', '#rs_wand_open', () => {
+            $('#extensionsMenu').hide();
+            openFromBall();
+        })
+        .on('click', '#rs_panel .rs_ball_toggle', () => setBallVisible(!settings().ball))
         .on('click', '#chat .mes_text', onMessageTap)
         .on('pointerdown', '.rs_inline_btn', e => e.preventDefault())
         .on('click', '.rs_inline_btn', function (e) {
@@ -2776,6 +2802,7 @@ function placeBall(x, y) {
 
 function renderBall() {
     $('#rs_ball').remove();
+    updateBallToggle();
     const s = settings();
     if (!s.ball) return;
 
@@ -2800,7 +2827,13 @@ function renderBall() {
     let drag = null;
 
     el.addEventListener('pointerdown', e => {
-        drag = { sx: e.clientX, sy: e.clientY, l: el.offsetLeft, t: el.offsetTop, moved: false };
+        drag = { sx: e.clientX, sy: e.clientY, l: el.offsetLeft, t: el.offsetTop, moved: false, long: false };
+        drag.timer = setTimeout(() => {
+            if (!drag || drag.moved) return;
+            drag.long = true;
+            setBallVisible(false);
+            toastr.info('悬浮球已隐藏。从魔棒菜单打开插件，在顶部可以重新打开');
+        }, BALL_LONG_PRESS);
         el.setPointerCapture(e.pointerId);
     });
 
@@ -2808,14 +2841,19 @@ function renderBall() {
         if (!drag) return;
         const dx = e.clientX - drag.sx;
         const dy = e.clientY - drag.sy;
-        if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) drag.moved = true;
+        if (!drag.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+            drag.moved = true;
+            clearTimeout(drag.timer);
+        }
         if (drag.moved) placeBall(drag.l + dx, drag.t + dy);
     });
 
     el.addEventListener('pointerup', () => {
         if (!drag) return;
-        const moved = drag.moved;
+        clearTimeout(drag.timer);
+        const { moved, long } = drag;
         drag = null;
+        if (long) return;
         if (moved) {
             settings().ballPos = { x: el.offsetLeft, y: el.offsetTop };
             ctx().saveSettingsDebounced();
@@ -2824,7 +2862,36 @@ function renderBall() {
         openFromBall();
     });
 
-    el.addEventListener('pointercancel', () => { drag = null; });
+    el.addEventListener('pointercancel', () => {
+        clearTimeout(drag?.timer);
+        drag = null;
+    });
+    el.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+const BALL_LONG_PRESS = 700;
+
+function setBallVisible(on) {
+    settings().ball = on;
+    ctx().saveSettingsDebounced();
+    $('#rs_ball_on').prop('checked', on);
+    renderBall();
+}
+
+function addWandMenu() {
+    const $menu = $('#extensionsMenu');
+    if (!$menu.length || $('#rs_wand_open').length) return;
+    $menu.append(`
+<div id="rs_wand_open" class="list-group-item flex-container flexGap5 interactable" tabindex="0">
+  <div class="fa-solid fa-pen-nib extensionsMenuExtensionButton"></div>
+  <span>重生成拼接</span>
+</div>`);
+}
+
+function updateBallToggle() {
+    const on = !!settings().ball;
+    $('#rs_panel .rs_ball_toggle').toggleClass('rs_on', on)
+        .find('i').attr('class', `fa-solid ${on ? 'fa-toggle-on' : 'fa-toggle-off'}`);
 }
 
 function imageToDataUrl(file) {
@@ -2970,6 +3037,8 @@ jQuery(() => {
     injectButtons();
     bindPanelEvents();
     renderBall();
+    addWandMenu();
+    setTimeout(addWandMenu, 1500);
     window.addEventListener('resize', () => {
         const el = document.getElementById('rs_ball');
         if (el) placeBall(el.offsetLeft, el.offsetTop);
