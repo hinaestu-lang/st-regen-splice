@@ -28,6 +28,9 @@ const DEFAULTS = {
     readerHide: 'think thinking',
     libMax: 500,
     clicheOn: true,
+    versionChip: true,
+    tapEdit: true,
+    branchChip: true,
     clicheWhole: true,
     clicheWords: [
         '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
@@ -125,6 +128,7 @@ function onGenEnded() {
 }
 
 function refreshSwipeUI(id, msg) {
+    updateVersionChip(id);
     const $mes = $(`#chat .mes[mesid="${id}"]`);
     $mes.find('.swipes-counter').text(`${msg.swipe_id + 1}/${msg.swipes.length}`);
     if (msg.swipes.length > 1 && id === ctx().chat.length - 1) {
@@ -304,6 +308,412 @@ function msgTarget(id) {
         closeAfterSave: true,
         save: text => saveMessage(id, text),
     };
+}
+
+const VERSION_PREVIEW = 60;
+
+function versionCount(m) {
+    return Array.isArray(m?.swipes) ? m.swipes.length : 0;
+}
+
+function updateVersionChip(id) {
+    const $mes = $(`#chat .mes[mesid="${id}"]`);
+    if (!$mes.length) return;
+    const m = ctx().chat[id];
+    const n = versionCount(m);
+    let $chip = $mes.find('.rs_vchip');
+    if (!settings().versionChip || n < 2) {
+        $chip.remove();
+        return;
+    }
+    if (!$chip.length) {
+        $chip = $(`<span class="rs_vchip"><span class="rs_vchip_arrow" data-d="-1">‹</span><span class="rs_vchip_num"></span><span class="rs_vchip_arrow" data-d="1">›</span></span>`);
+        const $host = $mes.find('.ch_name').first();
+        if ($host.length) $host.append($chip);
+        else ($mes.find('.mes_block').first().length ? $mes.find('.mes_block').first() : $mes).prepend($chip);
+    }
+    const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
+    $chip.find('.rs_vchip_num').text(`${cur + 1}/${n}`);
+    $chip.attr('data-id', id);
+}
+
+function updateAllVersionChips() {
+    $('#chat .mes[mesid]').each(function () {
+        const id = Number(this.getAttribute('mesid'));
+        updateVersionChip(id);
+        updateBranchChip(id);
+    });
+}
+
+const branchMainCache = new Map();
+let branchInfo = null;
+let branchLoading = null;
+
+async function postJson(url, body) {
+    const res = await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`${url} ${res.status}`);
+    return res.json();
+}
+
+async function chatMain(ch, file) {
+    if (branchMainCache.has(file)) return branchMainCache.get(file);
+    let main = null;
+    try {
+        const data = await postJson('/api/chats/get', { ch_name: ch.name, file_name: file, avatar_url: ch.avatar });
+        main = (Array.isArray(data) ? data[0] : null)?.chat_metadata?.main_chat ?? null;
+    } catch { }
+    branchMainCache.set(file, main);
+    return main;
+}
+
+const branchAt = file => {
+    const m = String(file).match(/^Branch #(\d+) - /);
+    return m ? Number(m[1]) : null;
+};
+
+async function loadBranches() {
+    const c = ctx();
+    const ch = currentChar();
+    if (!ch || c.groupId || !settings().branchChip) {
+        branchInfo = null;
+        return;
+    }
+    const cur = c.getCurrentChatId?.() ?? ch.chat;
+    let list = await postJson('/api/characters/chats', { avatar_url: ch.avatar, simple: true });
+    list = Array.isArray(list) ? list : Object.values(list || {});
+    const chats = list
+        .map(x => ({ file: String(x.file_name || '').replace(/\.jsonl$/, ''), last: String(x.mes ?? ''), date: x.last_mes ?? '' }))
+        .filter(x => x.file);
+    const parent = c.chatMetadata?.main_chat || null;
+    const curAt = branchAt(cur);
+    const groups = new Map();
+    const push = (k, x) => {
+        if (!groups.has(k)) groups.set(k, []);
+        if (!groups.get(k).some(y => y.file === x.file)) groups.get(k).push(x);
+    };
+    const candidates = chats.filter(x => x.file !== cur && branchAt(x.file) !== null);
+    const mains = await Promise.all(candidates.map(x => chatMain(ch, x.file)));
+    candidates.forEach((x, i) => {
+        const k = branchAt(x.file);
+        if (mains[i] === cur) push(k, { ...x, rel: '分支' });
+        else if (parent && mains[i] === parent && k === curAt) push(k, { ...x, rel: '同级分支' });
+    });
+    if (parent && curAt !== null) {
+        push(curAt, { ...(chats.find(x => x.file === parent) || { file: parent, last: '', date: '' }), rel: '主线' });
+    }
+    c.chat.forEach((m, i) => {
+        const link = m?.extra?.bookmark_link;
+        const x = link && link !== cur && chats.find(y => y.file === link);
+        if (x) push(i, { ...x, rel: '存档点' });
+    });
+    branchInfo = { cur, groups };
+}
+
+function refreshBranches() {
+    if (branchLoading) return branchLoading;
+    branchLoading = loadBranches()
+        .catch(e => {
+            console.warn('[重生成拼接] 读取分支失败', e);
+            branchInfo = null;
+        })
+        .finally(() => {
+            branchLoading = null;
+            updateAllVersionChips();
+        });
+    return branchLoading;
+}
+
+function updateBranchChip(id) {
+    const $mes = $(`#chat .mes[mesid="${id}"]`);
+    if (!$mes.length) return;
+    const list = settings().branchChip ? branchInfo?.groups.get(id) : null;
+    let $chip = $mes.find('.rs_bchip');
+    if (!list?.length) {
+        $chip.remove();
+        return;
+    }
+    if (!$chip.length) {
+        $chip = $('<span class="rs_bchip"><i class="fa-solid fa-code-branch"></i><span class="rs_bchip_num"></span></span>');
+        const $host = $mes.find('.ch_name').first();
+        if ($host.length) $host.append($chip);
+        else ($mes.find('.mes_block').first().length ? $mes.find('.mes_block').first() : $mes).prepend($chip);
+    }
+    $chip.find('.rs_bchip_num').text(list.length + 1);
+    $chip.attr('data-id', id);
+}
+
+function branchLabel(file) {
+    const m = String(file).match(/^(?:Branch|Checkpoint) #\d+ - (.+)$/);
+    return m ? m[1].replace(/@(\d+)h(\d+)m.*$/, ' $1:$2') : file;
+}
+
+function openBranchMenu(id, anchor) {
+    closeVersionMenu();
+    const list = branchInfo?.groups.get(id) || [];
+    const pv = t => {
+        const plain = readerDisplay(t).text.replace(/\s+/g, ' ').trim();
+        return plain.length > VERSION_PREVIEW ? plain.slice(0, VERSION_PREVIEW) + '…' : plain || '（空）';
+    };
+    const lastMes = ctx().chat[ctx().chat.length - 1];
+    const rows = [
+        `<div class="rs_vmenu_item rs_on"><div class="rs_vmenu_no">当前这条线　${escapeHtml(branchLabel(branchInfo.cur))}</div><div class="rs_vmenu_pv">${escapeHtml(pv(lastMes?.mes ?? ''))}</div></div>`,
+        ...list.map(x => `<div class="rs_vmenu_item" data-file="${escapeHtml(x.file)}"><div class="rs_vmenu_no">${x.rel}　${escapeHtml(branchLabel(x.file))}</div><div class="rs_vmenu_pv">${escapeHtml(pv(x.last))}</div></div>`),
+    ].join('');
+    placeMenu($(`<div id="rs_vmenu" data-branch="${id}">${rows}</div>`).appendTo('body'), anchor);
+}
+
+async function openBranch(file) {
+    closeVersionMenu();
+    if (isDirty() && !(await askConfirm('面板里有没保存的修改，切换分支会关掉面板，继续吗？'))) return;
+    if ($('#rs_overlay').length) await closePanel(true, true);
+    let open = ctx().openCharacterChat;
+    if (typeof open !== 'function') {
+        try {
+            open = (await import('/script.js')).openCharacterChat;
+        } catch { }
+    }
+    if (typeof open !== 'function') {
+        toastr.error('这个版本的酒馆不支持直接切换，请到聊天记录里打开');
+        return;
+    }
+    await open(file);
+}
+
+async function switchVersion(id, i) {
+    const c = ctx();
+    const m = c.chat[id];
+    const n = versionCount(m);
+    if (n < 2) return;
+    i = ((i % n) + n) % n;
+    const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
+    if (i === cur) return;
+    m.swipes[cur] = m.mes;
+    m.swipe_id = i;
+    m.mes = m.swipes[i];
+    const info = Array.isArray(m.swipe_info) ? m.swipe_info[i] : null;
+    if (info?.extra) m.extra = structuredClone(info.extra);
+    if (info?.send_date) m.send_date = info.send_date;
+    c.updateMessageBlock(id, m);
+    refreshSwipeUI(id, m);
+    await c.saveChat();
+}
+
+function openVersionMenu(id, anchor) {
+    closeVersionMenu();
+    const m = ctx().chat[id];
+    const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
+    const items = m.swipes.map((t, i) => {
+        const text = (i === cur ? m.mes : t);
+        const plain = readerDisplay(text).text.replace(/\s+/g, ' ').trim() || String(text).replace(/\s+/g, ' ').trim();
+        const pv = plain.length > VERSION_PREVIEW ? plain.slice(0, VERSION_PREVIEW) + '…' : plain || '（空）';
+        return `<div class="rs_vmenu_item ${i === cur ? 'rs_on' : ''}" data-i="${i}"><div class="rs_vmenu_no">版本 ${i + 1}${i === cur ? '　当前' : ''}</div><div class="rs_vmenu_pv">${escapeHtml(pv)}</div></div>`;
+    }).join('');
+    placeMenu($(`<div id="rs_vmenu" data-id="${id}">${items}</div>`).appendTo('body'), anchor);
+}
+
+function placeMenu($m, anchor) {
+    const r = anchor.getBoundingClientRect();
+    const w = Math.min(320, window.innerWidth - 16);
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+    const below = window.innerHeight - r.bottom;
+    $m.css({ left: left + 'px', width: w + 'px' });
+    if (below > 220 || below > r.top) $m.css({ top: r.bottom + 6 + 'px', maxHeight: below - 16 + 'px' });
+    else $m.css({ bottom: window.innerHeight - r.top + 6 + 'px', maxHeight: r.top - 16 + 'px' });
+}
+
+function closeVersionMenu() {
+    $('#rs_vmenu').remove();
+}
+
+const TAP_SKIP = 'a, button, input, textarea, select, summary, details, img, video, audio, iframe, label, .rs_vchip, .rs_bchip, .mes_buttons, .mes_edit_buttons, .swipe_left, .swipe_right';
+let tap = null;
+
+function textPosAt(x, y) {
+    if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        return p ? { node: p.offsetNode, offset: p.offset } : null;
+    }
+    const r = document.caretRangeFromPoint?.(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+}
+
+function nodeAtOffset(root, off) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n;
+    let last = null;
+    while ((n = walker.nextNode())) {
+        if (off <= n.length) return { node: n, offset: off };
+        off -= n.length;
+        last = n;
+    }
+    return last ? { node: last, offset: last.length } : null;
+}
+
+function rangeOf(root, a, b) {
+    const s0 = nodeAtOffset(root, a);
+    const s1 = nodeAtOffset(root, b);
+    if (!s0 || !s1) return null;
+    const r = document.createRange();
+    r.setStart(s0.node, s0.offset);
+    r.setEnd(s1.node, s1.offset);
+    return r;
+}
+
+function countOf(hay, needle) {
+    let n = 0;
+    let i = hay.indexOf(needle);
+    while (i >= 0) {
+        n++;
+        i = hay.indexOf(needle, i + needle.length);
+    }
+    return n;
+}
+
+function sentenceAtTap(e, textEl) {
+    const pos = textPosAt(e.clientX, e.clientY);
+    if (!pos || pos.node.nodeType !== Node.TEXT_NODE || !textEl.contains(pos.node)) return null;
+    const block = pos.node.parentElement.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6, div') || textEl;
+    const scope = textEl.contains(block) ? block : textEl;
+    const pre = document.createRange();
+    pre.setStart(scope, 0);
+    pre.setEnd(pos.node, pos.offset);
+    const at = pre.toString().length;
+    const full = scope.textContent;
+    let found = null;
+    eachSentence(full, (sen, a, b) => {
+        if (!found && at >= a && at < b && sen.trim()) found = { a, b, sen };
+    });
+    if (!found) return null;
+    const lead = found.sen.length - found.sen.trimStart().length;
+    const tail = found.sen.length - found.sen.trimEnd().length;
+    const a = found.a + lead;
+    const b = found.b - tail;
+    const sentence = full.slice(a, b);
+    const before = document.createRange();
+    before.setStart(textEl, 0);
+    const startPos = nodeAtOffset(scope, a);
+    before.setEnd(startPos.node, startPos.offset);
+    return { sentence, nth: countOf(before.toString(), sentence), range: rangeOf(scope, a, b) };
+}
+
+function locateInRaw(raw, sentence, nth) {
+    const d = readerDisplay(raw, { hide: '', body: '', code: false, md: true });
+    const squash = t => t.replace(/\s+/g, '');
+    const target = squash(sentence);
+    if (!target) return null;
+    const keep = [];
+    let plain = '';
+    for (let i = 0; i < d.text.length; i++) {
+        if (/\s/.test(d.text[i])) continue;
+        plain += d.text[i];
+        keep.push(d.map[i]);
+    }
+    const hits = [];
+    let i = plain.indexOf(target);
+    while (i >= 0) {
+        hits.push(i);
+        i = plain.indexOf(target, i + target.length);
+    }
+    if (!hits.length) return null;
+    const k = hits[Math.min(nth, hits.length - 1)];
+    return [keep[k], keep[k + target.length - 1] + 1];
+}
+
+function placeInlineBar() {
+    const $bar = $('#rs_inline_bar');
+    if (!$bar.length || !tap?.el?.isConnected) return;
+    const r = tap.el.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const viewTop = vv ? vv.offsetTop : 0;
+    const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+    const h = $bar.outerHeight();
+    const w = $bar.outerWidth();
+    let top = r.bottom + 8;
+    if (top + h > viewBottom - 8) top = r.top - h - 8;
+    top = Math.min(Math.max(viewTop + 8, top), viewBottom - h - 8);
+    const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
+    $bar.css({ top: top + 'px', left: left + 'px' });
+}
+
+function endInlineEdit(restore) {
+    if (!tap) return;
+    if (restore && tap.el?.isConnected) tap.el.replaceWith(tap.frag);
+    $('#rs_inline_bar').remove();
+    tap = null;
+}
+
+function onMessageTap(e) {
+    if (!settings().tapEdit) return;
+    if ($(e.target).closest('.rs_inline_edit').length) return;
+    if ($(e.target).closest(TAP_SKIP).length) return;
+    const textEl = e.currentTarget;
+    if (textEl.querySelector('textarea') || String(window.getSelection?.() || '').trim()) return;
+    if (tap) {
+        if (tap.el.innerText !== tap.original) return;
+        endInlineEdit(true);
+    }
+    const mes = textEl.closest('.mes');
+    const id = Number(mes?.getAttribute('mesid'));
+    const m = ctx().chat[id];
+    if (!Number.isInteger(id) || !m) return;
+    const hit = sentenceAtTap(e, textEl);
+    if (!hit?.range) return;
+    const span = locateInRaw(m.mes, hit.sentence, hit.nth);
+    if (!span) {
+        toastr.info('这句被正则改过显示，对不上原文，请用整楼编辑');
+        return;
+    }
+    const [a, b] = span;
+    const original = m.mes.slice(a, b);
+    const el = document.createElement('span');
+    el.className = 'rs_inline_edit';
+    el.contentEditable = 'plaintext-only';
+    if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true';
+    el.spellcheck = false;
+    el.textContent = original;
+    const frag = hit.range.extractContents();
+    hit.range.insertNode(el);
+    tap = { id, a, b, raw: m.mes, original, el, frag };
+    $('body').append('<div id="rs_inline_bar"><div class="rs_tb_btn" data-act="undo">撤回</div><div class="rs_tb_btn rs_inline_ok" data-act="ok">确认</div></div>');
+    el.focus();
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    placeInlineBar();
+}
+
+async function confirmInlineEdit() {
+    const t = tap;
+    if (!t) return;
+    const c = ctx();
+    const m = c.chat[t.id];
+    const piece = t.el.innerText.replace(/\n$/, '');
+    if (!m || m.mes !== t.raw) {
+        endInlineEdit(true);
+        toastr.warning('这一楼已经变了，没有保存');
+        return;
+    }
+    endInlineEdit(false);
+    if (piece === t.original) {
+        c.updateMessageBlock(t.id, m);
+        return;
+    }
+    let text = m.mes.slice(0, t.a) + piece + m.mes.slice(t.b);
+    if (!piece.trim()) text = text.replace(/\n[ \t]*\n[ \t]*\n/g, '\n\n');
+    setFloorText(t.id, text);
+    await c.saveChat();
+    toastr.success('已保存，点这里撤回', '', {
+        onclick: async () => {
+            const mm = ctx().chat[t.id];
+            if (!mm || mm.mes !== text) return;
+            setFloorText(t.id, t.raw);
+            await ctx().saveChat();
+            toastr.info('已撤回');
+        },
+    });
 }
 
 async function saveMessage(id, text) {
@@ -1016,8 +1426,15 @@ const READER_PRESETS = {
 };
 const COLOR_KEYS = [['bg', '底色'], ['text', '正文'], ['quote', '对话'], ['italic', '斜体'], ['muted', '次要']];
 
-function readerDisplay(raw) {
+function readerDisplay(raw, opt = {}) {
     raw = String(raw ?? '');
+    const o = {
+        hide: settings().readerHide,
+        body: settings().readerBody,
+        code: settings().readerHideCode,
+        md: settings().readerMarkdown,
+        ...opt,
+    };
     const gone = new Uint8Array(raw.length);
     const cut = re => {
         let m;
@@ -1029,11 +1446,11 @@ function readerDisplay(raw) {
             gone.fill(1, m.index, m.index + m[0].length);
         }
     };
-    tagNames(settings().readerHide).forEach(n => {
+    tagNames(o.hide).forEach(n => {
         const e = escapeRe(n);
         cut(new RegExp(`<${e}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${e}\\s*>|$)`, 'gi'));
     });
-    const body = tagNames(settings().readerBody)[0];
+    const body = tagNames(o.body)[0];
     if (body) {
         const e = escapeRe(body);
         const re = new RegExp(`<${e}(?:\\s[^>]*)?>([\\s\\S]*?)(?:</${e}\\s*>|$)`, 'gid');
@@ -1052,14 +1469,14 @@ function readerDisplay(raw) {
             outside.forEach((v, j) => { if (v) gone[j] = 1; });
         }
     }
-    if (settings().readerHideCode) cut(/```[\s\S]*?(?:```|$)/g);
+    if (o.code) cut(/```[\s\S]*?(?:```|$)/g);
     cut(/<\/?[A-Za-z_][\w-]*(?:\s[^>]*)?\/?>/g);
 
     let text = '';
     const map = [];
     const fmt = [];
     const shown = new Uint8Array(raw.length);
-    const md = settings().readerMarkdown;
+    const md = o.md;
     let f = 0;
     for (let j = 0; j < raw.length; j++) {
         if (gone[j]) continue;
@@ -2017,6 +2434,52 @@ async function openFromBall() {
 
 function bindPanelEvents() {
     $(document)
+        .on('click', '#chat .mes_text', onMessageTap)
+        .on('pointerdown', '#rs_inline_bar .rs_tb_btn', e => e.preventDefault())
+        .on('click', '#rs_inline_bar .rs_tb_btn', function (e) {
+            e.stopPropagation();
+            if (this.dataset.act === 'ok') confirmInlineEdit();
+            else endInlineEdit(true);
+        })
+        .on('input', '#chat .rs_inline_edit', placeInlineBar)
+        .on('keydown', '#chat .rs_inline_edit', e => {
+            if (e.key === 'Escape') endInlineEdit(true);
+        })
+        .on('click', '#chat .rs_vchip_arrow', function (e) {
+            e.stopPropagation();
+            closeVersionMenu();
+            const id = Number($(this).closest('.rs_vchip').attr('data-id'));
+            const m = ctx().chat[id];
+            switchVersion(id, (Number.isInteger(m.swipe_id) ? m.swipe_id : 0) + Number(this.dataset.d));
+        })
+        .on('click', '#chat .rs_vchip_num', function (e) {
+            e.stopPropagation();
+            const id = Number($(this).closest('.rs_vchip').attr('data-id'));
+            if ($('#rs_vmenu').attr('data-id') === String(id)) closeVersionMenu();
+            else openVersionMenu(id, this);
+        })
+        .on('click', '#rs_vmenu .rs_vmenu_item', function () {
+            if (this.dataset.file) {
+                openBranch(this.dataset.file);
+                return;
+            }
+            if (this.dataset.i === undefined) {
+                closeVersionMenu();
+                return;
+            }
+            const id = Number($('#rs_vmenu').attr('data-id'));
+            closeVersionMenu();
+            switchVersion(id, Number(this.dataset.i));
+        })
+        .on('click', '#chat .rs_bchip', function (e) {
+            e.stopPropagation();
+            const id = Number(this.getAttribute('data-id'));
+            if ($('#rs_vmenu').attr('data-branch') === String(id)) closeVersionMenu();
+            else openBranchMenu(id, this);
+        })
+        .on('pointerdown', e => {
+            if ($('#rs_vmenu').length && !$(e.target).closest('#rs_vmenu, .rs_vchip, .rs_bchip').length) closeVersionMenu();
+        })
         .on('click', '.regen_splice_btn', function () {
             openPanel(Number($(this).closest('.mes').attr('mesid')));
         })
@@ -2317,6 +2780,9 @@ function renderSettings() {
           <option value="original">原图形状</option>
         </select>
       </label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_tap_on"> 点聊天里的句子直接编辑</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_vchip_on"> 有多个版本的楼层显示版本切换</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_bchip_on"> 有分支的楼层显示分支切换</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_whole"> 八股词整句标出</label>
       <label>八股词表（一行一个；中间隔字用 ……，比如 不是……而是；用 /.../ 包起来是正则）
@@ -2376,6 +2842,21 @@ function renderSettings() {
         $('#rs_ball_url').val('');
         setBallImage('');
     });
+    $('#rs_vchip_on').prop('checked', s.versionChip).on('change', function () {
+        settings().versionChip = this.checked;
+        ctx().saveSettingsDebounced();
+        updateAllVersionChips();
+    });
+    $('#rs_tap_on').prop('checked', s.tapEdit).on('change', function () {
+        settings().tapEdit = this.checked;
+        ctx().saveSettingsDebounced();
+        endInlineEdit(true);
+    });
+    $('#rs_bchip_on').prop('checked', s.branchChip).on('change', function () {
+        settings().branchChip = this.checked;
+        ctx().saveSettingsDebounced();
+        refreshBranches();
+    });
     $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () { setClicheSetting('clicheOn', this.checked); });
     $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () { setClicheSetting('clicheWhole', this.checked); });
     $('#rs_cliche_words').val(s.clicheWords).on('input', function () { setClicheSetting('clicheWords', this.value); });
@@ -2393,6 +2874,9 @@ jQuery(() => {
     injectButtons();
     bindPanelEvents();
     renderBall();
+    window.visualViewport?.addEventListener('resize', placeInlineBar);
+    window.visualViewport?.addEventListener('scroll', placeInlineBar);
+    $('#chat').on('scroll', placeInlineBar);
     window.addEventListener('resize', () => {
         const el = document.getElementById('rs_ball');
         if (el) placeBall(el.offsetLeft, el.offsetTop);
@@ -2400,6 +2884,17 @@ jQuery(() => {
 
     c.eventSource.on(ev.GENERATION_STARTED, onGenStarted);
     c.eventSource.on(ev.CHARACTER_MESSAGE_RENDERED, onCharRendered);
+    [ev.CHARACTER_MESSAGE_RENDERED, ev.USER_MESSAGE_RENDERED, ev.MESSAGE_SWIPED, ev.MESSAGE_UPDATED, ev.MESSAGE_EDITED, ev.MESSAGE_DELETED, ev.MORE_MESSAGES_LOADED, ev.CHAT_CHANGED]
+        .filter(Boolean)
+        .forEach(e => c.eventSource.on(e, () => setTimeout(updateAllVersionChips, 0)));
+    if (ev.CHAT_CHANGED) {
+        c.eventSource.on(ev.CHAT_CHANGED, () => {
+            branchInfo = null;
+            setTimeout(refreshBranches, 300);
+        });
+    }
+    updateAllVersionChips();
+    refreshBranches();
     c.eventSource.on(ev.GENERATION_ENDED, onGenEnded);
     c.eventSource.on(ev.GENERATION_STOPPED, onGenEnded);
     c.eventSource.on(ev.CHAT_CHANGED, () => {
