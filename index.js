@@ -30,6 +30,7 @@ const DEFAULTS = {
     clicheOn: true,
     versionChip: true,
     tapEdit: true,
+    editBodyOnly: true,
     branchChip: true,
     clicheWhole: true,
     clicheWords: [
@@ -288,6 +289,28 @@ async function askInput(msg, def = '') {
     return window.prompt(msg, def);
 }
 
+function splitBody(raw) {
+    raw = String(raw ?? '');
+    const whole = { pre: '', body: raw, post: '' };
+    const name = tagNames(settings().readerBody)[0];
+    if (!settings().editBodyOnly || !name) return whole;
+    const e = escapeRe(name);
+    const m = new RegExp(`(<${e}(?:\\s[^>]*)?>)([\\s\\S]*?)(</${e}\\s*>)`, 'i').exec(raw);
+    if (!m) return whole;
+    const lines = m[2].split('\n');
+    const fixed = l => !l.trim() || /^\s*(?:<([A-Za-z_][\w-]*)[^>]*>[^<]*<\/\1\s*>|<\/?[A-Za-z_][\w-]*[^>]*>)\s*$/.test(l);
+    let i = 0;
+    while (i < lines.length && fixed(lines[i])) i++;
+    let j = lines.length;
+    while (j > i && fixed(lines[j - 1])) j--;
+    if (i >= j) return whole;
+    return {
+        pre: raw.slice(0, m.index) + m[1] + (i ? lines.slice(0, i).join('\n') + '\n' : ''),
+        body: lines.slice(i, j).join('\n'),
+        post: (j < lines.length ? '\n' + lines.slice(j).join('\n') : '') + m[3] + raw.slice(m.index + m[0].length),
+    };
+}
+
 function msgTarget(id) {
     const msg = ctx().chat[id];
     if (!msg) return null;
@@ -296,17 +319,20 @@ function msgTarget(id) {
     versions[cur] = msg.mes;
     let ref = cur > 0 ? cur - 1 : versions.length - 1;
     if (versions.length === 1) ref = 0;
+    const parts = splitBody(msg.mes);
     return {
         kind: 'msg',
-        draftKey: `msg:${ctx().getCurrentChatId?.() ?? ''}:${id}`,
+        id,
+        draftKey: `msg:${ctx().getCurrentChatId?.() ?? ''}:${id}${parts.pre || parts.post ? ':body' : ''}`,
         subtitle: `第 ${id} 楼`,
         pickers: '',
-        refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: t })),
+        refs: versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: splitBody(t).body })),
         ref,
-        initial: msg.mes,
+        initial: parts.body,
+        bodyOnly: !!(parts.pre || parts.post),
         saveLabel: '写回',
         closeAfterSave: true,
-        save: text => saveMessage(id, text),
+        save: text => saveMessage(id, parts.pre + text + parts.post),
     };
 }
 
@@ -593,7 +619,21 @@ function sentenceAtTap(e, textEl) {
     before.setStart(textEl, 0);
     const startPos = nodeAtOffset(scope, a);
     before.setEnd(startPos.node, startPos.offset);
-    return { sentence, nth: countOf(before.toString(), sentence), range: rangeOf(scope, a, b) };
+    return {
+        sentence,
+        nth: countOf(before.toString(), sentence),
+        range: rangeOf(scope, a, b),
+        scope,
+        block: full,
+        blockNth: countOf(full.slice(0, a), sentence),
+        blockStart: (() => {
+            const r = document.createRange();
+            r.setStart(textEl, 0);
+            const p0 = nodeAtOffset(scope, 0);
+            if (p0) r.setEnd(p0.node, p0.offset);
+            return r.toString();
+        })(),
+    };
 }
 
 function locateInRaw(raw, sentence, nth) {
@@ -619,37 +659,71 @@ function locateInRaw(raw, sentence, nth) {
     return [keep[k], keep[k + target.length - 1] + 1];
 }
 
-function placeInlineBar() {
-    const $bar = $('#rs_inline_bar');
-    if (!$bar.length || !tap?.el?.isConnected) return;
-    const r = tap.el.getBoundingClientRect();
-    const vv = window.visualViewport;
-    const viewTop = vv ? vv.offsetTop : 0;
-    const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
-    const h = $bar.outerHeight();
-    const w = $bar.outerWidth();
-    let top = r.bottom + 8;
-    if (top + h > viewBottom - 8) top = r.top - h - 8;
-    top = Math.min(Math.max(viewTop + 8, top), viewBottom - h - 8);
-    const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
-    $bar.css({ top: top + 'px', left: left + 'px' });
-}
+const INLINE_UNDO_PAUSE = 600;
 
 function endInlineEdit(restore) {
     if (!tap) return;
-    if (restore && tap.el?.isConnected) tap.el.replaceWith(tap.frag);
-    $('#rs_inline_bar').remove();
+    clearTimeout(tap.timer);
+    tap.box?.remove();
+    if (restore) $(tap.scope).show();
     tap = null;
+}
+
+function inlineSnap() {
+    clearTimeout(tap.timer);
+    const ta = tap.ta;
+    const last = tap.undo[tap.undo.length - 1];
+    if (last?.v === ta.value) return;
+    tap.undo.push({ v: ta.value, s: ta.selectionStart, e: ta.selectionEnd });
+    tap.redo = [];
+    updateInlineButtons();
+}
+
+function updateInlineButtons() {
+    if (!tap) return;
+    const dirtyUndo = tap.undo.length > 1 || tap.ta.value !== tap.undo[0].v;
+    $(tap.box).find('[data-act="undo"]').toggleClass('rs_off', !dirtyUndo);
+    $(tap.box).find('[data-act="redo"]').toggleClass('rs_off', !tap.redo.length);
+}
+
+function inlineUndo() {
+    if (tap.ta.value !== tap.undo[tap.undo.length - 1].v) inlineSnap();
+    if (tap.undo.length < 2) return;
+    tap.redo.push(tap.undo.pop());
+    applyInline(tap.undo[tap.undo.length - 1]);
+}
+
+function inlineRedo() {
+    const sn = tap.redo.pop();
+    if (!sn) return;
+    tap.undo.push(sn);
+    applyInline(sn);
+}
+
+function applyInline(sn) {
+    const ta = tap.ta;
+    ta.value = sn.v;
+    ta.focus();
+    ta.setSelectionRange(sn.s, sn.e);
+    fitInline();
+    updateInlineButtons();
+}
+
+function fitInline() {
+    const ta = tap?.ta;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 2 + 'px';
 }
 
 function onMessageTap(e) {
     if (!settings().tapEdit) return;
-    if ($(e.target).closest('.rs_inline_edit').length) return;
+    if ($(e.target).closest('.rs_inline_box').length) return;
     if ($(e.target).closest(TAP_SKIP).length) return;
     const textEl = e.currentTarget;
-    if (textEl.querySelector('textarea') || String(window.getSelection?.() || '').trim()) return;
+    if (textEl.querySelector('textarea:not(.rs_inline_ta)') || String(window.getSelection?.() || '').trim()) return;
     if (tap) {
-        if (tap.el.innerText !== tap.original) return;
+        if (tap.ta.value !== tap.original) return;
         endInlineEdit(true);
     }
     const mes = textEl.closest('.mes');
@@ -657,32 +731,48 @@ function onMessageTap(e) {
     const m = ctx().chat[id];
     if (!Number.isInteger(id) || !m) return;
     const hit = sentenceAtTap(e, textEl);
-    if (!hit?.range) return;
-    const span = locateInRaw(m.mes, hit.sentence, hit.nth);
+    if (!hit) return;
+    const useBlock = hit.scope !== textEl && hit.block.trim();
+    const para = useBlock ? locateInRaw(m.mes, hit.block.trim(), countOf(hit.blockStart, hit.block.trim())) : null;
+    const span = para || locateInRaw(m.mes, hit.sentence, hit.nth);
     if (!span) {
         toastr.info('这句被正则改过显示，对不上原文，请用整楼编辑');
         return;
     }
     const [a, b] = span;
     const original = m.mes.slice(a, b);
-    const el = document.createElement('span');
-    el.className = 'rs_inline_edit';
-    el.contentEditable = 'plaintext-only';
-    if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true';
-    el.spellcheck = false;
-    el.textContent = original;
-    const frag = hit.range.extractContents();
-    hit.range.insertNode(el);
-    tap = { id, a, b, raw: m.mes, original, el, frag };
-    $('body').append('<div id="rs_inline_bar"><div class="rs_tb_btn" data-act="undo">撤回</div><div class="rs_tb_btn rs_inline_ok" data-act="ok">确认</div></div>');
-    el.focus();
-    const sel = window.getSelection();
-    const r = document.createRange();
-    r.selectNodeContents(el);
-    r.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(r);
-    placeInlineBar();
+    let selA = 0;
+    let selB = original.length;
+    if (para) {
+        const inner = locateInRaw(original, hit.sentence, hit.blockNth);
+        if (inner) [selA, selB] = inner;
+    }
+
+    const $box = $(`
+<div class="rs_inline_box">
+  <div class="rs_inline_tools">
+    <div class="rs_inline_btn fa-solid fa-object-group" data-act="all" title="全选"></div>
+    <div class="rs_inline_btn fa-solid fa-copy" data-act="copy" title="复制"></div>
+    <div class="rs_inline_btn fa-solid fa-rotate-left" data-act="undo" title="撤回"></div>
+    <div class="rs_inline_btn fa-solid fa-rotate-right" data-act="redo" title="重做"></div>
+    <div class="rs_inline_btn fa-solid fa-xmark" data-act="cancel" title="取消"></div>
+    <div class="rs_inline_btn rs_inline_ok fa-solid fa-check" data-act="ok" title="确认"></div>
+  </div>
+  <textarea class="rs_inline_ta" spellcheck="false"></textarea>
+</div>`);
+    const scope = useBlock ? hit.scope : null;
+    if (scope) {
+        $(scope).hide().after($box);
+    } else {
+        $(textEl).before($box);
+    }
+    const ta = $box.find('.rs_inline_ta')[0];
+    ta.value = original;
+    tap = { id, a, b, raw: m.mes, original, ta, box: $box[0], scope, undo: [{ v: original, s: selA, e: selB }], redo: [], timer: 0 };
+    fitInline();
+    updateInlineButtons();
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(selA, selB);
 }
 
 async function confirmInlineEdit() {
@@ -690,17 +780,14 @@ async function confirmInlineEdit() {
     if (!t) return;
     const c = ctx();
     const m = c.chat[t.id];
-    const piece = t.el.innerText.replace(/\n$/, '');
+    const piece = t.ta.value;
     if (!m || m.mes !== t.raw) {
         endInlineEdit(true);
         toastr.warning('这一楼已经变了，没有保存');
         return;
     }
-    endInlineEdit(false);
-    if (piece === t.original) {
-        c.updateMessageBlock(t.id, m);
-        return;
-    }
+    endInlineEdit(piece === t.original);
+    if (piece === t.original) return;
     let text = m.mes.slice(0, t.a) + piece + m.mes.slice(t.b);
     if (!piece.trim()) text = text.replace(/\n[ \t]*\n[ \t]*\n/g, '\n\n');
     setFloorText(t.id, text);
@@ -1080,6 +1167,9 @@ function renderBack() {
 
     $btn.toggle(isMsg);
     $('#rs_panel .rs_cliche_set').toggle(isMsg);
+    $('#rs_panel .rs_bodyonly').toggle(isMsg && (state.target.bodyOnly || !settings().editBodyOnly))
+        .text(settings().editBodyOnly ? '仅正文' : '全文')
+        .toggleClass('rs_on', !!settings().editBodyOnly);
     if (!isMsg) {
         $('#rs_panel .rs_cliche_box').hide();
         $('#rs_panel .rs_cliche_set').removeClass('rs_on');
@@ -1962,6 +2052,7 @@ function ensureShell() {
     <div class="rs_grip"><span></span></div>
     <div class="rs_bar">
       <div class="rs_bar_title">正文</div>
+      <div class="rs_bodyonly" title="只编辑正文 / 编辑全文"></div>
       <div class="rs_cliche" title="跳到下一个八股词"></div>
       <div class="rs_icon rs_cliche_set fa-solid fa-list-ul" title="编辑八股词表"></div>
       <div class="rs_icon rs_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
@@ -2435,14 +2526,32 @@ async function openFromBall() {
 function bindPanelEvents() {
     $(document)
         .on('click', '#chat .mes_text', onMessageTap)
-        .on('pointerdown', '#rs_inline_bar .rs_tb_btn', e => e.preventDefault())
-        .on('click', '#rs_inline_bar .rs_tb_btn', function (e) {
+        .on('pointerdown', '.rs_inline_btn', e => e.preventDefault())
+        .on('click', '.rs_inline_btn', function (e) {
             e.stopPropagation();
-            if (this.dataset.act === 'ok') confirmInlineEdit();
-            else endInlineEdit(true);
+            if (!tap) return;
+            const act = this.dataset.act;
+            if (act === 'ok') confirmInlineEdit();
+            else if (act === 'cancel') endInlineEdit(true);
+            else if (act === 'undo') inlineUndo();
+            else if (act === 'redo') inlineRedo();
+            else if (act === 'all') {
+                tap.ta.focus();
+                tap.ta.setSelectionRange(0, tap.ta.value.length);
+            }
+            else if (act === 'copy') {
+                const ta = tap.ta;
+                copyText(ta.selectionEnd > ta.selectionStart ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : ta.value);
+            }
         })
-        .on('input', '#chat .rs_inline_edit', placeInlineBar)
-        .on('keydown', '#chat .rs_inline_edit', e => {
+        .on('input', '.rs_inline_ta', () => {
+            if (!tap) return;
+            fitInline();
+            clearTimeout(tap.timer);
+            tap.timer = setTimeout(inlineSnap, INLINE_UNDO_PAUSE);
+            updateInlineButtons();
+        })
+        .on('keydown', '.rs_inline_ta', e => {
             if (e.key === 'Escape') endInlineEdit(true);
         })
         .on('click', '#chat .rs_vchip_arrow', function (e) {
@@ -2628,6 +2737,15 @@ function bindPanelEvents() {
             toggleBox('cliche');
         })
         .on('click', '#rs_panel .rs_cliche_fix', fixAllCliche)
+        .on('click', '#rs_panel .rs_bodyonly', () => {
+            if (isDirty()) {
+                toastr.info('先写回或撤回修改，再切换');
+                return;
+            }
+            settings().editBodyOnly = !settings().editBodyOnly;
+            ctx().saveSettingsDebounced();
+            showTarget(msgTarget(state.target.id));
+        })
         .on('click', '#rs_panel .rs_find_btn', () => {
             $('#rs_panel .rs_find_ex').val(settings().findExclude);
             toggleBox('find');
@@ -2874,9 +2992,6 @@ jQuery(() => {
     injectButtons();
     bindPanelEvents();
     renderBall();
-    window.visualViewport?.addEventListener('resize', placeInlineBar);
-    window.visualViewport?.addEventListener('scroll', placeInlineBar);
-    $('#chat').on('scroll', placeInlineBar);
     window.addEventListener('resize', () => {
         const el = document.getElementById('rs_ball');
         if (el) placeBall(el.offsetLeft, el.offsetTop);

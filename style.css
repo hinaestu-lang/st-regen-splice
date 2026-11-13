@@ -132,6 +132,7 @@
     pointer-events: none;
 }
 
+#rs_panel .rs_bodyonly,
 #rs_panel .rs_cliche {
     flex: none;
     padding: 3px 10px;
@@ -966,43 +967,61 @@
     opacity: 0.5;
 }
 
-#chat .rs_inline_edit {
-    outline: none;
-    padding: 1px 2px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, transparent);
-    box-shadow: 0 0 0 1.5px var(--SmartThemeQuoteColor);
-    white-space: pre-wrap;
-    -webkit-user-select: text;
-    user-select: text;
+.rs_inline_box {
+    margin: 4px 0 8px;
 }
 
-#rs_inline_bar {
-    position: fixed;
-    z-index: 9997;
+.rs_inline_tools {
     display: flex;
+    justify-content: flex-end;
     gap: 4px;
-    padding: 4px;
-    border-radius: 10px;
-    background: rgba(30, 30, 30, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+    margin-bottom: 4px;
 }
 
-#rs_inline_bar .rs_tb_btn {
-    padding: 8px 16px;
-    border-radius: 7px;
-    color: #fff;
-    font-size: 14px;
-    line-height: 1.2;
-    white-space: nowrap;
+.rs_inline_btn {
+    width: 34px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    font-size: 15px;
     cursor: pointer;
+    opacity: 0.8;
 }
 
-#rs_inline_bar .rs_inline_ok {
-    background: var(--SmartThemeQuoteColor);
+.rs_inline_btn:active {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
 }
 
-#rs_inline_bar .rs_tb_btn:active {
-    opacity: 0.6;
+.rs_inline_btn.rs_off {
+    opacity: 0.25;
+    pointer-events: none;
+}
+
+.rs_inline_btn.rs_inline_ok {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+.rs_inline_ta {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    border: 1.5px solid var(--SmartThemeQuoteColor) !important;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 6%, transparent) !important;
+    color: var(--SmartThemeBodyColor) !important;
+    font: inherit;
+    line-height: inherit;
+    resize: none;
+    overflow: hidden;
+}
+
+#rs_panel .rs_bodyonly.rs_on {
+    opacity: 1;
+    border-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeQuoteColor);
 }
