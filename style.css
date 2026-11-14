@@ -168,7 +168,9 @@
     color: var(--rs-accent);
 }
 
-#rs_panel .rs_lib_box {
+#rs_panel .rs_lib_box,
+#rs_panel .rs_find_box,
+#rs_panel .rs_cliche_box {
     display: none;
     flex: none;
     padding: 8px 16px 6px;
@@ -181,26 +183,6 @@
     margin-bottom: 6px;
 }
 
-#rs_panel .rs_lib_head input {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    padding: 6px 10px;
-    border-radius: 10px;
-    border: 1px solid var(--rs-line) !important;
-    background: transparent !important;
-    color: var(--SmartThemeBodyColor) !important;
-    font-size: 14px;
-}
-
-#rs_panel .rs_lib_head .menu_button {
-    flex: none;
-    margin: 0;
-    padding: 5px 12px;
-    border-radius: 10px;
-    font-size: 13px;
-    white-space: nowrap;
-}
 
 #rs_panel .rs_lib_list {
     max-height: 32dvh;
@@ -238,12 +220,6 @@
     opacity: 0.5;
 }
 
-#rs_panel .rs_find_box {
-    display: none;
-    flex: none;
-    padding: 8px 16px 6px;
-    border-bottom: 1px solid var(--rs-line);
-}
 
 #rs_panel .rs_find_row {
     display: flex;
@@ -252,6 +228,7 @@
     margin-bottom: 6px;
 }
 
+#rs_panel .rs_lib_head input,
 #rs_panel .rs_find_row input {
     flex: 1;
     min-width: 0;
@@ -264,6 +241,7 @@
     font-size: 14px;
 }
 
+#rs_panel .rs_lib_head .menu_button,
 #rs_panel .rs_find_row .menu_button {
     flex: none;
     margin: 0;
@@ -281,10 +259,7 @@
 }
 
 #rs_panel .rs_cliche_box {
-    display: none;
-    flex: none;
-    padding: 8px 16px 10px;
-    border-bottom: 1px solid var(--rs-line);
+    padding-bottom: 10px;
 }
 
 #rs_panel .rs_cliche_opts {
@@ -504,7 +479,6 @@
     opacity: 0.85;
     border: 1px solid var(--SmartThemeBorderColor);
     background: var(--SmartThemeBlurTintColor);
-    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
     color: var(--SmartThemeQuoteColor);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
@@ -1081,4 +1055,14 @@
 #rs_panel .rs_ball_toggle.rs_on {
     opacity: 1;
     color: var(--rs-accent);
+}
+
+#chat.rs_selecting .mes:not(.rs_sel_mes),
+#chat.rs_selecting .rs_sel_mes .mes_buttons,
+#chat.rs_selecting .rs_sel_mes .ch_name,
+#chat.rs_selecting .rs_sel_mes .mesAvatarWrapper,
+#chat.rs_selecting .rs_sel_mes .swipe_left,
+#chat.rs_selecting .rs_sel_mes .swipe_right {
+    -webkit-user-select: none;
+    user-select: none;
 }

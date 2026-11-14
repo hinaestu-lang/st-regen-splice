@@ -30,6 +30,7 @@ const DEFAULTS = {
     clicheOn: true,
     versionChip: true,
     tapEdit: true,
+    selectGuard: true,
     editBodyOnly: true,
     branchChip: true,
     clicheWhole: true,
@@ -158,6 +159,28 @@ function injectButtons() {
     $('#chat .mes .extraMesButtons').each(function () {
         if (!$(this).find('.regen_splice_btn').length) $(this).prepend(BTN_HTML);
     });
+}
+
+function eachMatch(re, text, fn) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+        if (!m[0]) {
+            re.lastIndex++;
+            continue;
+        }
+        fn(m);
+    }
+}
+
+function tagBlockRe(name, flags = 'gi') {
+    const e = escapeRe(name);
+    return new RegExp(`<${e}(?:\\s[^>]*)?>([\\s\\S]*?)(?:</${e}\\s*>|$)`, flags);
+}
+
+function previewText(text, max) {
+    const one = (readerDisplay(text).text || String(text ?? '')).replace(/\s+/g, ' ').trim();
+    return one.length > max ? one.slice(0, max) + '…' : one || '（空）';
 }
 
 function escapeHtml(s) {
@@ -351,36 +374,64 @@ function versionCount(m) {
     return Array.isArray(m?.swipes) ? m.swipes.length : 0;
 }
 
-function updateVersionChip(id) {
-    const $mes = $(`#chat .mes[mesid="${id}"]`);
-    if (!$mes.length) return;
+function mesEl(id) {
+    return document.querySelector(`#chat .mes[mesid="${id}"]`);
+}
+
+function ensureChip(el, cls, html) {
+    const old = el.querySelector(`.${cls}`);
+    if (old) return $(old);
+    const $chip = $(html);
+    const host = el.querySelector('.ch_name') || el.querySelector('.mes_block') || el;
+    if (host.classList.contains('ch_name')) host.append($chip[0]);
+    else host.prepend($chip[0]);
+    return $chip;
+}
+
+function updateVersionChip(id, el = mesEl(id)) {
+    if (!el) return;
     const m = ctx().chat[id];
     const n = versionCount(m);
-    let $chip = $mes.find('.rs_vchip');
     if (!settings().versionChip || n < 2) {
-        $chip.remove();
+        el.querySelector('.rs_vchip')?.remove();
         return;
     }
-    if (!$chip.length) {
-        $chip = $(`<span class="rs_vchip"><span class="rs_vchip_arrow" data-d="-1">‹</span><span class="rs_vchip_num"></span><span class="rs_vchip_arrow" data-d="1">›</span></span>`);
-        const $host = $mes.find('.ch_name').first();
-        if ($host.length) $host.append($chip);
-        else ($mes.find('.mes_block').first().length ? $mes.find('.mes_block').first() : $mes).prepend($chip);
-    }
+    const $chip = ensureChip(el, 'rs_vchip', '<span class="rs_vchip"><span class="rs_vchip_arrow" data-d="-1">‹</span><span class="rs_vchip_num"></span><span class="rs_vchip_arrow" data-d="1">›</span></span>');
     const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
     $chip.find('.rs_vchip_num').text(`${cur + 1}/${n}`);
     $chip.attr('data-id', id);
 }
 
-function updateAllVersionChips() {
-    $('#chat .mes[mesid]').each(function () {
-        const id = Number(this.getAttribute('mesid'));
-        updateVersionChip(id);
-        updateBranchChip(id);
-    });
+function updateChipsOf(el) {
+    const id = Number(el.getAttribute('mesid'));
+    updateVersionChip(id, el);
+    updateBranchChip(id, el);
 }
 
-const branchMainCache = new Map();
+function updateAllVersionChips() {
+    document.querySelectorAll('#chat .mes[mesid]').forEach(updateChipsOf);
+}
+
+function updateChipsById(id) {
+    const el = Number.isInteger(Number(id)) ? mesEl(Number(id)) : null;
+    if (el) updateChipsOf(el);
+    else updateAllVersionChips();
+}
+
+const BRANCH_CACHE_KEY = 'regenSplice:branchMain';
+const branchMainCache = new Map((() => {
+    try {
+        return Object.entries(JSON.parse(localStorage.getItem(BRANCH_CACHE_KEY) || '{}'));
+    } catch {
+        return [];
+    }
+})());
+
+function saveBranchCache() {
+    try {
+        localStorage.setItem(BRANCH_CACHE_KEY, JSON.stringify(Object.fromEntries(branchMainCache)));
+    } catch { }
+}
 let branchInfo = null;
 let branchLoading = null;
 
@@ -427,7 +478,11 @@ async function loadBranches() {
         if (!groups.get(k).some(y => y.file === x.file)) groups.get(k).push(x);
     };
     const candidates = chats.filter(x => x.file !== cur && branchAt(x.file) !== null);
-    const mains = await Promise.all(candidates.map(x => chatMain(ch, x.file)));
+    const mains = [];
+    for (let i = 0; i < candidates.length; i += 3) {
+        mains.push(...await Promise.all(candidates.slice(i, i + 3).map(x => chatMain(ch, x.file))));
+    }
+    saveBranchCache();
     candidates.forEach((x, i) => {
         const k = branchAt(x.file);
         if (mains[i] === cur) push(k, { ...x, rel: '分支' });
@@ -458,21 +513,14 @@ function refreshBranches() {
     return branchLoading;
 }
 
-function updateBranchChip(id) {
-    const $mes = $(`#chat .mes[mesid="${id}"]`);
-    if (!$mes.length) return;
+function updateBranchChip(id, el = mesEl(id)) {
+    if (!el) return;
     const list = settings().branchChip ? branchInfo?.groups.get(id) : null;
-    let $chip = $mes.find('.rs_bchip');
     if (!list?.length) {
-        $chip.remove();
+        el.querySelector('.rs_bchip')?.remove();
         return;
     }
-    if (!$chip.length) {
-        $chip = $('<span class="rs_bchip"><i class="fa-solid fa-code-branch"></i><span class="rs_bchip_num"></span></span>');
-        const $host = $mes.find('.ch_name').first();
-        if ($host.length) $host.append($chip);
-        else ($mes.find('.mes_block').first().length ? $mes.find('.mes_block').first() : $mes).prepend($chip);
-    }
+    const $chip = ensureChip(el, 'rs_bchip', '<span class="rs_bchip"><i class="fa-solid fa-code-branch"></i><span class="rs_bchip_num"></span></span>');
     $chip.find('.rs_bchip_num').text(list.length + 1);
     $chip.attr('data-id', id);
 }
@@ -485,10 +533,7 @@ function branchLabel(file) {
 function openBranchMenu(id, anchor) {
     closeVersionMenu();
     const list = branchInfo?.groups.get(id) || [];
-    const pv = t => {
-        const plain = readerDisplay(t).text.replace(/\s+/g, ' ').trim();
-        return plain.length > VERSION_PREVIEW ? plain.slice(0, VERSION_PREVIEW) + '…' : plain || '（空）';
-    };
+    const pv = t => previewText(t, VERSION_PREVIEW);
     const lastMes = ctx().chat[ctx().chat.length - 1];
     const rows = [
         `<div class="rs_vmenu_item rs_on"><div class="rs_vmenu_no">当前这条线　${escapeHtml(branchLabel(branchInfo.cur))}</div><div class="rs_vmenu_pv">${escapeHtml(pv(lastMes?.mes ?? ''))}</div></div>`,
@@ -538,9 +583,7 @@ function openVersionMenu(id, anchor) {
     const m = ctx().chat[id];
     const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
     const items = m.swipes.map((t, i) => {
-        const text = (i === cur ? m.mes : t);
-        const plain = readerDisplay(text).text.replace(/\s+/g, ' ').trim() || String(text).replace(/\s+/g, ' ').trim();
-        const pv = plain.length > VERSION_PREVIEW ? plain.slice(0, VERSION_PREVIEW) + '…' : plain || '（空）';
+        const pv = previewText(i === cur ? m.mes : t, VERSION_PREVIEW);
         return `<div class="rs_vmenu_item ${i === cur ? 'rs_on' : ''}" data-i="${i}"><div class="rs_vmenu_no">版本 ${i + 1}${i === cur ? '　当前' : ''}</div><div class="rs_vmenu_pv">${escapeHtml(pv)}</div></div>`;
     }).join('');
     placeMenu($(`<div id="rs_vmenu" data-id="${id}">${items}</div>`).appendTo('body'), anchor);
@@ -715,12 +758,37 @@ function fitInline() {
     ta.style.height = ta.scrollHeight + 2 + 'px';
 }
 
-function onMessageTap(e) {
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_DIST = 30;
+let lastTap = null;
+
+function onMessageClick(e) {
     if (!settings().tapEdit) return;
-    if ($(e.target).closest('.rs_inline_box').length) return;
-    if ($(e.target).closest(TAP_SKIP).length) return;
+    if ($(e.target).closest('.rs_inline_box').length || $(e.target).closest(TAP_SKIP).length) return;
+    const now = Date.now();
+    const prev = lastTap;
+    lastTap = { t: now, x: e.clientX, y: e.clientY, el: e.currentTarget };
+    if (!prev || prev.el !== e.currentTarget || now - prev.t > DOUBLE_TAP_MS || Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > DOUBLE_TAP_DIST) return;
+    lastTap = null;
+    window.getSelection()?.removeAllRanges();
+    onMessageTap(e);
+}
+
+function keepInView() {
+    const box = tap?.box;
+    const chat = document.getElementById('chat');
+    if (!box?.isConnected || !chat) return;
+    const vv = window.visualViewport;
+    const viewTop = Math.max(chat.getBoundingClientRect().top, vv ? vv.offsetTop : 0);
+    const viewBottom = Math.min(chat.getBoundingClientRect().bottom, vv ? vv.offsetTop + vv.height : window.innerHeight);
+    const r = box.getBoundingClientRect();
+    if (r.top < viewTop + 8) chat.scrollTop -= viewTop + 8 - r.top;
+    else if (r.bottom > viewBottom - 8) chat.scrollTop += Math.min(r.bottom - viewBottom + 8, r.top - viewTop - 8);
+}
+
+function onMessageTap(e) {
     const textEl = e.currentTarget;
-    if (textEl.querySelector('textarea:not(.rs_inline_ta)') || String(window.getSelection?.() || '').trim()) return;
+    if (textEl.querySelector('textarea:not(.rs_inline_ta)')) return;
     if (tap) {
         if (tap.ta.value !== tap.original) return;
         endInlineEdit(true);
@@ -751,6 +819,8 @@ function onMessageTap(e) {
   </div>
   <textarea class="rs_inline_ta" spellcheck="false"></textarea>
 </div>`);
+    const chat = document.getElementById('chat');
+    const keep = chat?.scrollTop;
     const frag = hit.range.extractContents();
     hit.range.insertNode($box[0]);
     const ta = $box.find('.rs_inline_ta')[0];
@@ -760,6 +830,12 @@ function onMessageTap(e) {
     updateInlineButtons();
     ta.focus({ preventScroll: true });
     ta.setSelectionRange(original.length, original.length);
+    if (chat) chat.scrollTop = keep;
+    requestAnimationFrame(() => {
+        if (chat) chat.scrollTop = keep;
+        keepInView();
+    });
+    setTimeout(keepInView, 400);
 }
 
 async function confirmInlineEdit() {
@@ -832,6 +908,10 @@ async function postCharUpdate(body) {
     return res.ok;
 }
 
+async function savedTarget(key, initial, rest) {
+    return { refs: await buildRefs(key, initial), key, ref: 0, initial, saveLabel: '保存', closeAfterSave: false, ...rest };
+}
+
 async function charTarget(field = 'description') {
     const ch = currentChar();
     if (!ch) {
@@ -851,10 +931,7 @@ async function charTarget(field = 'description') {
         : String((def[3] ? ch.data?.[def[0]] : ch[def[0]] ?? ch.data?.[def[0]]) ?? '');
     const key = isAlt ? (field === 'alt:new' ? null : `char:${ch.avatar}:alt:${altIndex}`) : `char:${ch.avatar}:${def[0]}`;
 
-    const preview = t => {
-        const one = String(t).replace(/\s+/g, ' ').trim();
-        return one.length > ALT_PREVIEW ? one.slice(0, ALT_PREVIEW) + '…' : one || '（空）';
-    };
+    const preview = t => previewText(t, ALT_PREVIEW);
     const opts = [
         ...CHAR_FIELDS.map(([k, label]) => `<option value="${k}" ${k === field ? 'selected' : ''}>${label}</option>`),
         `<optgroup label="备选开场白（${alts.length}）">`,
@@ -863,17 +940,12 @@ async function charTarget(field = 'description') {
         '</optgroup>',
     ].join('');
 
-    return {
+    return savedTarget(key, initial, {
         kind: 'char',
         field,
         subtitle: escapeHtml(ch.name),
         pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
-        refs: await buildRefs(key, initial),
-        key,
-        ref: 0,
-        initial,
         saveLabel: field === 'alt:new' ? '新建' : '保存',
-        closeAfterSave: false,
         save: async function (text) {
             if (isAlt) {
                 const list = [...(Array.isArray(ch.data?.alternate_greetings) ? ch.data.alternate_greetings : [])];
@@ -902,7 +974,7 @@ async function charTarget(field = 'description') {
             toastr.success('角色卡已保存');
             return true;
         },
-    };
+    });
 }
 
 async function personaTarget() {
@@ -914,23 +986,17 @@ async function personaTarget() {
     }
     const initial = String($box.val() ?? '');
     const key = `persona:${c.name1}`;
-    return {
+    return savedTarget(key, initial, {
         kind: 'persona',
         subtitle: escapeHtml(c.name1),
         pickers: '',
-        refs: await buildRefs(key, initial),
-        key,
-        ref: 0,
-        initial,
-        saveLabel: '保存',
-        closeAfterSave: false,
         save: async text => {
             $('#persona_description').val(text).trigger('input');
             await addSnaps(key, initial, text);
             toastr.success('用户人设已保存');
             return true;
         },
-    };
+    });
 }
 
 function worldNames() {
@@ -973,19 +1039,13 @@ async function worldTarget(book, uid) {
     const initial = String(entry.content ?? '');
     const key = `wi:${book}:${entry.uid}`;
 
-    return {
+    return savedTarget(key, initial, {
         kind: 'world',
         pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
 <select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>
 ${wiToggleHtml(!entry.disable)}`,
         book,
         uid: entry.uid,
-        refs: await buildRefs(key, initial),
-        key,
-        ref: 0,
-        initial,
-        saveLabel: '保存',
-        closeAfterSave: false,
         save: async text => {
             const fresh = await ctx().loadWorldInfo(book);
             if (!fresh?.entries?.[entry.uid]) {
@@ -999,7 +1059,7 @@ ${wiToggleHtml(!entry.disable)}`,
             toastr.success('世界书条目已保存');
             return true;
         },
-    };
+    });
 }
 
 function wiToggleHtml(on) {
@@ -1068,16 +1128,10 @@ function clicheHits(text) {
     const re = clicheRegex();
     if (!re) return [];
     const hits = [];
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text))) {
-        if (!m[0]) {
-            re.lastIndex++;
-            continue;
-        }
+    eachMatch(re, text, m => {
         const k = Object.keys(m.groups).find(g => /^c\d+$/.test(g) && m.groups[g] !== undefined);
         hits.push({ a: m.index, b: m.index + m[0].length, entry: clicheCache.entries[Number(k.slice(1))] });
-    }
+    });
     return hits;
 }
 
@@ -1206,27 +1260,10 @@ function backHtml(text, ranges, cls, caret) {
 const findQuery = () => String($('#rs_panel .rs_find_q').val() ?? '');
 const findReplacement = () => String($('#rs_panel .rs_find_r').val() ?? '');
 
-function excludeNames() {
-    return String(settings().findExclude || '')
-        .split(/[\s,，、]+/)
-        .map(x => x.replace(/[<>/]/g, '').trim())
-        .filter(x => /^[\w-]+$/.test(x));
-}
 
 function excludedSpans(text) {
     const spans = [];
-    excludeNames().forEach(name => {
-        const n = escapeRe(name);
-        const re = new RegExp(`<${n}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${n}\\s*>|$)`, 'gi');
-        let m;
-        while ((m = re.exec(text))) {
-            if (!m[0]) {
-                re.lastIndex++;
-                continue;
-            }
-            spans.push([m.index, m.index + m[0].length]);
-        }
-    });
+    tagNames(settings().findExclude).forEach(name => eachMatch(tagBlockRe(name), text, m => spans.push([m.index, m.index + m[0].length])));
     return spans;
 }
 
@@ -1513,33 +1550,12 @@ function readerDisplay(raw, opt = {}) {
         ...opt,
     };
     const gone = new Uint8Array(raw.length);
-    const cut = re => {
-        let m;
-        while ((m = re.exec(raw))) {
-            if (!m[0]) {
-                re.lastIndex++;
-                continue;
-            }
-            gone.fill(1, m.index, m.index + m[0].length);
-        }
-    };
-    tagNames(o.hide).forEach(n => {
-        const e = escapeRe(n);
-        cut(new RegExp(`<${e}(?:\\s[^>]*)?>[\\s\\S]*?(?:</${e}\\s*>|$)`, 'gi'));
-    });
+    const cut = re => eachMatch(re, raw, m => gone.fill(1, m.index, m.index + m[0].length));
+    tagNames(o.hide).forEach(n => cut(tagBlockRe(n)));
     const body = tagNames(o.body)[0];
     if (body) {
-        const e = escapeRe(body);
-        const re = new RegExp(`<${e}(?:\\s[^>]*)?>([\\s\\S]*?)(?:</${e}\\s*>|$)`, 'gid');
         const keep = [];
-        let m;
-        while ((m = re.exec(raw))) {
-            if (!m[0]) {
-                re.lastIndex++;
-                continue;
-            }
-            keep.push(m.indices[1]);
-        }
+        eachMatch(tagBlockRe(body, 'gid'), raw, m => keep.push(m.indices[1]));
         if (keep.length) {
             const outside = new Uint8Array(raw.length).fill(1);
             keep.forEach(([a, b]) => outside.fill(0, a, b));
@@ -2529,7 +2545,7 @@ function bindPanelEvents() {
             openFromBall();
         })
         .on('click', '#rs_panel .rs_ball_toggle', () => setBallVisible(!settings().ball))
-        .on('click', '#chat .mes_text', onMessageTap)
+        .on('click', '#chat .mes_text', onMessageClick)
         .on('pointerdown', '.rs_inline_btn', e => e.preventDefault())
         .on('click', '.rs_inline_btn', function (e) {
             e.stopPropagation();
@@ -2878,6 +2894,20 @@ function setBallVisible(on) {
     renderBall();
 }
 
+function guardSelection() {
+    const chat = document.getElementById('chat');
+    if (!chat) return;
+    const sel = window.getSelection();
+    const node = sel?.anchorNode;
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    const mes = settings().selectGuard && sel.rangeCount && !sel.isCollapsed ? el?.closest?.('#chat .mes') : null;
+    const cur = chat.querySelector('.mes.rs_sel_mes');
+    if (mes === cur) return;
+    cur?.classList.remove('rs_sel_mes');
+    mes?.classList.add('rs_sel_mes');
+    chat.classList.toggle('rs_selecting', !!mes);
+}
+
 function addWandMenu() {
     const $menu = $('#extensionsMenu');
     if (!$menu.length || $('#rs_wand_open').length) return;
@@ -2943,7 +2973,8 @@ function renderSettings() {
           <option value="original">原图形状</option>
         </select>
       </label>
-      <label class="checkbox_label"><input type="checkbox" id="rs_tap_on"> 点聊天里的句子直接编辑</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_tap_on"> 双击聊天里的句子直接编辑</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_selguard_on"> 聊天里选字只选在同一楼（防止乱跳、选太多）</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_vchip_on"> 有多个版本的楼层显示版本切换</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_bchip_on"> 有分支的楼层显示分支切换</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
@@ -3010,6 +3041,11 @@ function renderSettings() {
         ctx().saveSettingsDebounced();
         updateAllVersionChips();
     });
+    $('#rs_selguard_on').prop('checked', s.selectGuard).on('change', function () {
+        settings().selectGuard = this.checked;
+        ctx().saveSettingsDebounced();
+        guardSelection();
+    });
     $('#rs_tap_on').prop('checked', s.tapEdit).on('change', function () {
         settings().tapEdit = this.checked;
         ctx().saveSettingsDebounced();
@@ -3037,6 +3073,8 @@ jQuery(() => {
     injectButtons();
     bindPanelEvents();
     renderBall();
+    document.addEventListener('selectionchange', guardSelection);
+    window.visualViewport?.addEventListener('resize', () => { if (tap) keepInView(); });
     addWandMenu();
     setTimeout(addWandMenu, 1500);
     window.addEventListener('resize', () => {
@@ -3046,13 +3084,16 @@ jQuery(() => {
 
     c.eventSource.on(ev.GENERATION_STARTED, onGenStarted);
     c.eventSource.on(ev.CHARACTER_MESSAGE_RENDERED, onCharRendered);
-    [ev.CHARACTER_MESSAGE_RENDERED, ev.USER_MESSAGE_RENDERED, ev.MESSAGE_SWIPED, ev.MESSAGE_UPDATED, ev.MESSAGE_EDITED, ev.MESSAGE_DELETED, ev.MORE_MESSAGES_LOADED, ev.CHAT_CHANGED]
+    [ev.CHARACTER_MESSAGE_RENDERED, ev.USER_MESSAGE_RENDERED, ev.MESSAGE_SWIPED, ev.MESSAGE_UPDATED, ev.MESSAGE_EDITED]
+        .filter(Boolean)
+        .forEach(e => c.eventSource.on(e, id => setTimeout(() => updateChipsById(id), 0)));
+    [ev.MESSAGE_DELETED, ev.MORE_MESSAGES_LOADED, ev.CHAT_CHANGED]
         .filter(Boolean)
         .forEach(e => c.eventSource.on(e, () => setTimeout(updateAllVersionChips, 0)));
     if (ev.CHAT_CHANGED) {
         c.eventSource.on(ev.CHAT_CHANGED, () => {
             branchInfo = null;
-            setTimeout(refreshBranches, 300);
+            setTimeout(refreshBranches, 1500);
         });
     }
     updateAllVersionChips();
