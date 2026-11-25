@@ -1347,3 +1347,9 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+#rs_panel .rs_pz_head .rs_pz_kind {
+    flex: none;
+    width: auto;
+    max-width: 40%;
+}

@@ -281,9 +281,11 @@ async function addSnaps(key, before, after) {
 async function buildRefs(key, initial) {
     const refs = [{ label: '打开时', text: initial }];
     (await getVers(key)).forEach(v => refs.push({ label: `★ ${v.name}`, text: v.text, verId: v.id }));
-    (await getSnaps(key)).slice().reverse().forEach(sn => {
-        if (sn.text !== initial) refs.push({ label: `存档 ${fmtTime(sn.time)}`, text: sn.text });
-    });
+    const snaps = await getSnaps(key);
+    for (let i = snaps.length - 1; i >= 0; i--) {
+        const sn = snaps[i];
+        if (sn.text !== initial) refs.push({ label: `存档 ${fmtTime(sn.time)}`, text: sn.text, snapIdx: i, time: sn.time });
+    }
     return refs;
 }
 
@@ -349,7 +351,7 @@ function msgTarget(id) {
         subtitle: `第 ${id} 楼`,
         pickers: '',
         refs: [
-            ...versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: splitBody(t).body, group: '这一楼的版本' })),
+            ...versions.map((t, i) => ({ label: `版本 ${i + 1}${i === cur ? '（当前）' : ''}`, text: splitBody(t).body, group: '这一楼的版本', swipe: i === cur || versions.length < 2 ? undefined : i })),
             ...floors,
         ],
         ref,
@@ -918,9 +920,30 @@ function nameOpts(list, cur, curMark) {
 const charList = () => (ctx().characters || []).filter(c => c?.avatar).map(c => ({ id: c.avatar, name: String(c.name ?? c.avatar) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
 
+async function fullChar(ch) {
+    if (!ch?.shallow) return ch;
+    const c = ctx();
+    const chid = c.characters.indexOf(ch);
+    try {
+        if (typeof c.unshallowCharacter === 'function') await c.unshallowCharacter(chid);
+        else {
+            const res = await fetch('/api/characters/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: ch.avatar }) });
+            if (res.ok) {
+                Object.assign(ch, await res.json());
+                delete ch.shallow;
+            }
+        }
+    } catch (e) {
+        console.warn('[重生成拼接] 读取角色失败', e);
+    }
+    const now = c.characters[chid] || ch;
+    if (now.shallow) toastr.warning('没读到这个角色的完整内容');
+    return now;
+}
+
 async function charTarget(field = 'description', avatar = null) {
     const cur = currentChar();
-    const ch = (avatar && ctx().characters.find(c => c.avatar === avatar)) || cur || ctx().characters.find(c => c?.avatar);
+    const ch = await fullChar((avatar && ctx().characters.find(c => c.avatar === avatar)) || cur || ctx().characters.find(c => c?.avatar));
     if (!ch) {
         toastr.warning('还没有角色卡');
         return null;
@@ -1772,7 +1795,8 @@ function ensureShell() {
       <div class="rs_bar_title">参考</div>
       <div class="rs_icon rs_diff fa-solid fa-highlighter" title="标出正文里没有的句子"></div>
       <div class="rs_icon rs_use fa-solid fa-file-import" title="整篇换成这一版"></div>
-      <div class="rs_icon rs_ver_del fa-solid fa-trash-can" title="删除这个版本"></div>
+      <div class="rs_icon rs_ver_del fa-solid fa-trash-can" title="删除"></div>
+      <div class="rs_icon rs_snap_clear fa-solid fa-broom" title="清空全部存档"></div>
       <select class="rs_ref text_pole"></select>
     </div>
     <div class="rs_ref_pane"></div>
@@ -1823,6 +1847,7 @@ function ensureShell() {
       <div class="rs_pz_sec">
         <div class="rs_bar rs_pz_head">
           <span class="rs_pz_label">来源</span>
+          <select class="rs_pz_kind text_pole"><option value="cur">当前预设</option><option value="p">其他预设</option><option value="w">世界书</option><option value="f">导入的文件</option></select>
           <select class="rs_pz_src text_pole"></select>
           <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入 txt / Word / json"><input type="file" class="rs_pz_file" accept=".txt,.md,.json,.docx,.doc,text/plain,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>
         </div>
@@ -1981,8 +2006,11 @@ function fillRefSelect(idx) {
 }
 
 function updateRefButtons() {
-    const r = state.target?.refs[state.ref];
-    $('#rs_panel .rs_ver_del').toggle(!!r?.verId);
+    const t = state.target;
+    const r = t?.refs[state.ref];
+    const title = r?.verId ? '删除这个版本' : r?.snapIdx !== undefined ? '删除这个存档' : '删除这一楼的这个版本';
+    $('#rs_panel .rs_ver_del').toggle(!!r && (!!r.verId || r.snapIdx !== undefined || r.swipe !== undefined)).attr('title', title);
+    $('#rs_panel .rs_snap_clear').toggle(!!t?.refs.some(x => x.snapIdx !== undefined));
 }
 
 async function refreshRefs(selectVerId) {
@@ -2019,12 +2047,55 @@ async function saveAsVersion() {
 async function deleteVersion() {
     const t = state.target;
     const r = t?.refs[state.ref];
-    if (!r?.verId) return;
-    if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？`))) return;
-    await putVers(t.key, (await getVers(t.key)).filter(v => v.id !== r.verId));
+    if (!r) return;
+    if (r.verId) {
+        if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？`))) return;
+        await putVers(t.key, (await getVers(t.key)).filter(v => v.id !== r.verId));
+        toastr.success('版本已删除');
+    } else if (r.snapIdx !== undefined) {
+        if (!(await askConfirm(`删除「${r.label}」？`))) return;
+        const arr = await getSnaps(t.key);
+        if (arr[r.snapIdx]?.time === r.time) arr.splice(r.snapIdx, 1);
+        await idbPut(t.key, arr);
+        toastr.success('存档已删除');
+    } else if (r.swipe !== undefined) {
+        if (!(await askConfirm(`从聊天里删掉这一楼的「${r.label}」？删了就找不回来`))) return;
+        if (!(await deleteSwipe(t.id, r.swipe))) return;
+        const fresh = msgTarget(t.id);
+        t.refs = fresh.refs;
+        state.ref = Math.min(state.ref, t.refs.length - 1);
+        state.used = new Set();
+        fillRefSelect(state.ref);
+        updateRefButtons();
+        renderRef();
+        renderBack();
+        toastr.success('已删除');
+        return;
+    } else return;
     state.ref = 0;
     await refreshRefs();
-    toastr.success('版本已删除');
+}
+
+async function clearSnaps() {
+    const t = state.target;
+    const n = t?.refs.filter(x => x.snapIdx !== undefined).length;
+    if (!n || !(await askConfirm(`清空这一项的全部存档？收藏的★版本会保留`))) return;
+    await idbPut(t.key, []);
+    state.ref = 0;
+    await refreshRefs();
+    toastr.success('存档已清空');
+}
+
+async function deleteSwipe(id, i) {
+    const c = ctx();
+    const msg = c.chat[id];
+    if (!msg || !Array.isArray(msg.swipes) || msg.swipes.length < 2 || i === msg.swipe_id) return false;
+    msg.swipes.splice(i, 1);
+    if (Array.isArray(msg.swipe_info)) msg.swipe_info.splice(i, 1);
+    if (i < msg.swipe_id) msg.swipe_id--;
+    refreshSwipeUI(id, msg);
+    await c.saveChat();
+    return true;
 }
 
 function useRefWhole() {
@@ -2300,7 +2371,7 @@ const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
-const pz = { src: null, tgt: null, file: null, sel: new Set(), tl: [], ed: null };
+const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], ed: null };
 
 const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
 const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -2517,24 +2588,27 @@ async function pzReadFile(file) {
     return { text };
 }
 
-function pzBuildFileSource() {
-    const f = pz.file;
+function pzBuildFileSource(i) {
+    const f = pz.files[i];
     const list = f.entries || (pzNorm(f.text) ? [{ name: f.name.replace(/\.[^.]+$/, ''), content: pzNorm(f.text) }] : []);
     pz.src = {
-        v: 'file',
-        entries: pzClassify(list.map((e, i) => (e.key ? e : { key: `f:${i}`, id: null, role: 'system', raw: null, enabled: true, ...e }))),
+        v: 'f:' + i,
+        entries: pzClassify(list.map((e, j) => (e.key ? e : { key: `f:${i}:${j}`, id: null, role: 'system', raw: null, enabled: true, ...e }))),
     };
 }
 
 async function pzLoadFile(file) {
     try {
         const r = await pzReadFile(file);
-        pz.file = { name: file.name, ...r };
+        const f = { name: file.name, ...r };
+        let i = pz.files.findIndex(x => x.name === f.name);
+        if (i < 0) i = pz.files.push(f) - 1;
+        else pz.files[i] = f;
         pz.sel.clear();
-        pzBuildFileSource();
+        pzBuildFileSource(i);
         await pzFillSelects();
         pzRender();
-        toastr.success(pz.file.text ? `读到「${file.name}」` : `读到 ${pz.src.entries.length} 条`);
+        toastr.success(f.text ? `读到「${file.name}」` : `读到 ${pz.src.entries.length} 条`);
     } catch (e) {
         toastr.error(e?.message || '读取文件失败');
     }
@@ -2543,11 +2617,14 @@ async function pzLoadFile(file) {
 async function pzSetSource(v) {
     const pm = await pzPM();
     pz.sel.clear();
-    if (v === 'file') {
-        if (pz.file) pzBuildFileSource();
+    if (v.startsWith('f:')) {
+        if (pz.files[v.slice(2)]) pzBuildFileSource(Number(v.slice(2)));
+        else pz.src = { v: 'f:', entries: [] };
     } else if (v === 'cur') {
         const live = await pzLive(pm);
         pz.src = { v, entries: pzFromPreset({ prompts: live?.prompts || [], prompt_order: live?.prompt_order || [] }) };
+    } else if (v === 'p:' || v === 'w:') {
+        pz.src = { v, entries: [] };
     } else if (v.startsWith('p:')) {
         pz.src = { v, entries: pzFromPreset(pzStored(pm, v.slice(2))?.preset || {}) };
     } else if (v.startsWith('w:')) {
@@ -2582,14 +2659,33 @@ async function pzFillSelects() {
     const names = pzNames(pm);
     const cur = pm.getSelectedPresetName();
     const opt = (v, t) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`;
-    const worlds = worldNames();
-    $('#rs_panel .rs_pz_src').html([
-        opt('cur', `当前预设：${cur}`),
-        pz.file ? opt('file', `文件：${pz.file.name}`) : '',
-        names.length > 1 ? `<optgroup label="其他预设">${names.filter(n => n !== cur).map(n => opt('p:' + n, n)).join('')}</optgroup>` : '',
-        worlds.length ? `<optgroup label="世界书">${worlds.map(n => opt('w:' + n, n)).join('')}</optgroup>` : '',
-    ].join('')).val(pz.src?.v || 'cur');
+    const v = pz.src?.v || 'cur';
+    const kind = v === 'cur' ? 'cur' : v.slice(0, 1);
+    const lists = {
+        p: names.filter(n => n !== cur).map(n => opt('p:' + n, n)),
+        w: worldNames().map(n => opt('w:' + n, n)),
+        f: pz.files.map((f, i) => opt('f:' + i, f.name)),
+    };
+    $('#rs_panel .rs_pz_kind').val(kind);
+    $('#rs_panel .rs_pz_src').toggle(kind !== 'cur')
+        .html(kind === 'cur' ? '' : lists[kind].join('') || `<option value="">${{ p: '没有其他预设', w: '没有世界书', f: '还没导入文件' }[kind]}</option>`)
+        .val(kind === 'cur' ? '' : v);
     $('#rs_panel .rs_pz_tgt').html(names.map(n => opt(n, n + (n === cur ? '（当前）' : ''))).join('')).val(pz.tgt?.name || cur);
+}
+
+async function pzSetKind(kind) {
+    if (pz.src?.v && pz.src.v !== 'cur') pz.last[pz.src.v.slice(0, 1)] = pz.src.v;
+    let v = 'cur';
+    if (kind !== 'cur') {
+        const pm = await pzPM();
+        const cur = pm.getSelectedPresetName();
+        const first = { p: pzNames(pm).find(n => n !== cur), w: worldNames()[0], f: pz.files.length ? pz.files.length - 1 : undefined }[kind];
+        v = pz.last[kind] || (first === undefined ? kind + ':' : kind + ':' + first);
+        if (kind === 'f' && !pz.files[v.slice(2)]) v = first === undefined ? 'f:' : 'f:' + first;
+    }
+    await pzSetSource(v);
+    await pzFillSelects();
+    pzRender();
 }
 
 function pzFilter(list, side) {
@@ -2996,7 +3092,7 @@ async function pzChangeTarget(name) {
 
 function pzReset() {
     pz.tgt = null;
-    if (pz.src?.v !== 'file') pz.src = null;
+    if (!pz.src?.v.startsWith('f:')) pz.src = null;
     pz.sel.clear();
     pz.ed = null;
 }
@@ -3036,7 +3132,8 @@ function rxStore(scope = rx.scope) {
     return ch?.data?.extensions?.regex_scripts || [];
 }
 
-function rxLoad(scope) {
+async function rxLoad(scope) {
+    if (scope !== 'g') await fullChar(ctx().characters.find(x => x.avatar === scope.slice(2)));
     Object.assign(rx, { scope, list: structuredClone(rxStore(scope)), undo: [], dirty: false });
 }
 
@@ -3142,7 +3239,7 @@ async function rxChangeScope(scope) {
         $('#rs_panel .rs_rx_scope').val(rx.scope);
         return;
     }
-    rxLoad(scope);
+    await rxLoad(scope);
     rxRender();
 }
 
@@ -3165,7 +3262,7 @@ async function rxWrite(scope, list) {
         toastr.error('找不到这个角色');
         return false;
     }
-    const ch = c.characters[chid];
+    const ch = await fullChar(c.characters[chid]);
     const next = merge(ch.data?.extensions?.regex_scripts || []);
     if (typeof c.writeExtensionField === 'function') await c.writeExtensionField(chid, 'regex_scripts', next);
     else {
@@ -3210,7 +3307,7 @@ async function rxSave() {
         onclick: async () => {
             if (!(await rxWrite(scope, before))) return;
             if (state.target?.kind === 'regex' && rx.scope === scope && !rx.dirty) {
-                rxLoad(scope);
+                await rxLoad(scope);
                 rxRender();
             }
             await rxRefreshChat();
@@ -3328,9 +3425,9 @@ function rxReset() {
     rx.undo = [];
 }
 
-function openRegex() {
+async function openRegex() {
     rxCloseEd();
-    rxLoad(rx.scope === 'g' || rx.scope.startsWith('c:') && ctx().characters.some(x => 'c:' + x.avatar === rx.scope) ? rx.scope : 'g');
+    await rxLoad(rx.scope === 'g' || rx.scope.startsWith('c:') && ctx().characters.some(x => 'c:' + x.avatar === rx.scope) ? rx.scope : 'g');
     rxFillScope();
     rxRender();
 }
@@ -3374,7 +3471,9 @@ async function openFromBall() {
 
 function bindPanelEvents() {
     $(document)
+        .on('change', '#rs_panel .rs_pz_kind', function () { pzSetKind(this.value); })
         .on('change', '#rs_panel .rs_pz_src', async function () {
+            if (!this.value) return;
             await pzSetSource(this.value);
             pzRender();
         })
@@ -3526,6 +3625,7 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_wi_toggle', toggleWorldEntry)
         .on('click', '#rs_panel .rs_ver_add', saveAsVersion)
         .on('click', '#rs_panel .rs_ver_del', deleteVersion)
+        .on('click', '#rs_panel .rs_snap_clear', clearSnaps)
         .on('click', '#rs_panel .rs_use', useRefWhole)
         .on('click', '#rs_panel .rs_diff', function () {
             state.diff = !state.diff;
