@@ -1906,7 +1906,13 @@ function ensureShell() {
         <div class="rs_icon rs_rx_redo fa-solid fa-rotate-right" title="重做"></div>
         <div class="menu_button rs_rx_save">保存</div>
       </div>
-      <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"></div>
+      <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"><div class="rs_icon rs_rx_all fa-solid fa-check-double" title="全选列表里的"></div></div>
+      <div class="rs_bar rs_pz_act rs_rx_act">
+        <span class="rs_pz_count rs_rx_count"></span>
+        <select class="rs_rx_bmove text_pole"></select>
+        <div class="menu_button rs_rx_bdel">删除</div>
+        <div class="rs_icon rs_rx_bclear fa-solid fa-xmark" title="取消选择"></div>
+      </div>
       <div class="rs_pz_list rs_rx_list" data-drop="rx"></div>
       <div class="rs_rx_ed"></div>
     </div>
@@ -3347,7 +3353,7 @@ const RX_FLAGS = [['markdownOnly', '只改显示'], ['promptOnly', '只改发送
 const RX_MACRO = [[0, '不替换宏'], [1, '宏原样替换'], [2, '宏转义后替换']];
 const RX_UNDO = 50;
 
-const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null };
+const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set() };
 
 function rxBlank() {
     return {
@@ -3395,6 +3401,8 @@ const rxScopeName = scope => scope === 'g' ? '全局正则' : scope.startsWith('
 async function rxLoad(scope) {
     if (scope !== 'g') await fullChar(ctx().characters.find(x => x.avatar === scope.slice(2)));
     Object.assign(rx, { scope, list: structuredClone(await rxStore(scope)), undo: [], redo: [], dirty: false });
+    rx.sel.clear();
+    $('#rs_panel .rs_rx_bmove').empty();
 }
 
 function rxRegex(str) {
@@ -3422,17 +3430,55 @@ function rxRowHtml(s) {
     const flags = RX_FLAGS.slice(0, 2).filter(([k]) => s[k]).map(([, t]) => t);
     const tags = [...places, ...flags].map(t => `<span class="rs_pz_cat_tag">${escapeHtml(t)}</span>`).join('');
     const bad = s.findRegex && !rxRegex(s.findRegex) ? '<span class="rs_pz_tag rs_pz_diff">表达式有误</span>' : '';
-    return `<div class="rs_pz_row${s.disabled ? ' rs_pz_off' : ''}" data-k="${escapeHtml(s.id)}"><span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(s.scriptName || '（无名）')}</span>${bad}${tags}</div><div class="rs_pz_pv rs_rx_pv">${escapeHtml(s.findRegex || '（没写表达式）')}</div></div><span class="rs_icon rs_rx_toggle fa-solid ${s.disabled ? 'fa-toggle-off' : 'fa-toggle-on'}" title="启用或关闭"></span></div>`;
+    const sel = rx.sel.has(s.id);
+    return `<div class="rs_pz_row${s.disabled ? ' rs_pz_off' : ''}${sel ? ' rs_pz_sel' : ''}" data-k="${escapeHtml(s.id)}"><span class="rs_cb_hit"><span class="rs_cb"></span></span><span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(s.scriptName || '（无名）')}</span>${bad}${tags}</div><div class="rs_pz_pv rs_rx_pv">${escapeHtml(s.findRegex || '（没写表达式）')}</div></div><span class="rs_icon rs_rx_toggle fa-solid ${s.disabled ? 'fa-toggle-off' : 'fa-toggle-on'}" title="启用或关闭"></span></div>`;
+}
+
+function rxRows() {
+    const q = String($('#rs_panel .rs_rx_q').val() || '').trim().toLowerCase();
+    return rx.list.filter(s => !q || String(s.scriptName).toLowerCase().includes(q) || String(s.findRegex).toLowerCase().includes(q));
+}
+
+async function rxRenderAct() {
+    const ids = new Set(rx.list.map(x => x.id));
+    rx.sel.forEach(id => { if (!ids.has(id)) rx.sel.delete(id); });
+    const n = rx.sel.size;
+    $('#rs_panel .rs_rx_act').toggle(n > 0);
+    $('#rs_panel .rs_rx_count').text(`已选 ${n}`);
+    if (n && !$('#rs_panel .rs_rx_bmove option').length) $('#rs_panel .rs_rx_bmove').html(`<option value="">移到…</option>${await rxScopeOpts('', rx.scope)}`);
+}
+
+function rxToggleSel(id) {
+    if (rx.sel.has(id)) rx.sel.delete(id);
+    else rx.sel.add(id);
+    $(`#rs_panel .rs_rx_list .rs_pz_row[data-k="${CSS.escape(id)}"]`).toggleClass('rs_pz_sel', rx.sel.has(id));
+    rxRenderAct();
+}
+
+function rxSelectAll() {
+    const rows = rxRows();
+    const all = rows.length && rows.every(s => rx.sel.has(s.id));
+    rows.forEach(s => (all ? rx.sel.delete(s.id) : rx.sel.add(s.id)));
+    rxRender();
+}
+
+async function rxDeleteSel() {
+    const n = rx.sel.size;
+    if (!n || !(await askConfirm(`删掉选中的 ${n} 条正则？保存前可以撤回`))) return;
+    rxPush();
+    rx.list = rx.list.filter(x => !rx.sel.has(x.id));
+    rx.sel.clear();
+    rxChanged();
 }
 
 function rxRender() {
-    const q = String($('#rs_panel .rs_rx_q').val() || '').trim().toLowerCase();
-    const rows = rx.list.filter(s => !q || String(s.scriptName).toLowerCase().includes(q) || String(s.findRegex).toLowerCase().includes(q));
+    const rows = rxRows();
     $('#rs_panel .rs_rx_list').html(rows.length ? rows.map(rxRowHtml).join('')
         : `<div class="rs_empty">${rx.list.length ? '没有符合的正则' : '这里还没有正则，可以点 ＋ 新建，或者点文件图标导入 json'}</div>`);
     $('#rs_panel .rs_rx_undo').toggleClass('rs_off', !rx.undo.length);
     $('#rs_panel .rs_rx_redo').toggleClass('rs_off', !rx.redo.length);
     $('#rs_panel .rs_rx_save').toggleClass('rs_off', !rx.dirty).text(rx.dirty ? '保存' : '已保存');
+    rxRenderAct();
 }
 
 function rxPush() {
@@ -3574,27 +3620,40 @@ async function rxPresetWrite(name, list) {
     return true;
 }
 
-async function rxMoveTo(scope) {
-    const ed = rx.ed;
-    if (!ed || !scope) return;
-    const s = structuredClone(rxEdValues());
-    if (!String(s.scriptName).trim()) return toastr.warning('给正则起个名字');
-    if (!(await askConfirm(`把「${s.scriptName}」移到${rxScopeName(scope)}？`))) {
-        $('#rs_panel .rs_rx_move').val('');
-        return;
-    }
-    const dest = await rxStore(scope);
-    if (dest.some(x => x.id === s.id)) s.id = pzUid();
-    if (!(await rxWrite(scope, [...structuredClone(dest), s]))) return;
-    if (ed.id) {
-        const stored = await rxStore(rx.scope);
-        if (stored.some(x => x.id === ed.id)) await rxWrite(rx.scope, structuredClone(stored).filter(x => x.id !== ed.id));
-        rx.list = rx.list.filter(x => x.id !== ed.id);
-    }
-    rxCloseEd();
+async function rxMoveMany(items, scope) {
+    if (!scope || !items.length) return false;
+    const label = items.length === 1 ? `「${items[0].scriptName}」` : `选中的 ${items.length} 条正则`;
+    if (!(await askConfirm(`把${label}移到${rxScopeName(scope)}？`))) return false;
+    const dest = structuredClone(await rxStore(scope));
+    const moved = items.map(x => {
+        const c = structuredClone(x);
+        if (dest.some(d => d.id === c.id)) c.id = pzUid();
+        return c;
+    });
+    if (!(await rxWrite(scope, [...dest, ...moved]))) return false;
+    const ids = new Set(items.map(x => x.id));
+    const stored = await rxStore(rx.scope);
+    if (stored.some(x => ids.has(x.id))) await rxWrite(rx.scope, structuredClone(stored).filter(x => !ids.has(x.id)));
+    rx.list = rx.list.filter(x => !ids.has(x.id));
+    ids.forEach(id => rx.sel.delete(id));
     rxRender();
     await rxRefreshChat();
     toastr.success(`已移到${rxScopeName(scope)}`);
+    return true;
+}
+
+async function rxMoveTo(scope) {
+    const ed = rx.ed;
+    if (!ed || !scope) return;
+    const s = rxEdValues();
+    if (!String(s.scriptName).trim()) return toastr.warning('给正则起个名字');
+    if (await rxMoveMany([s], scope)) rxCloseEd();
+    else $('#rs_panel .rs_rx_move').val('');
+}
+
+async function rxMoveSel(scope) {
+    const items = rx.list.filter(x => rx.sel.has(x.id));
+    if (!(await rxMoveMany(items, scope))) $('#rs_panel .rs_rx_bmove').val('');
 }
 
 async function rxRefreshChat() {
@@ -3832,9 +3891,17 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_rx_save', rxSave)
         .on('click', '#rs_panel .rs_rx_list .rs_pz_row', function (e) {
             if ($(e.target).closest('.rs_drag').length) return;
+            if ($(e.target).closest('.rs_cb_hit').length) return rxToggleSel(this.dataset.k);
             if ($(e.target).closest('.rs_rx_toggle').length) return rxToggle(this.dataset.k);
             rxOpenEd(this.dataset.k);
         })
+        .on('click', '#rs_panel .rs_rx_all', rxSelectAll)
+        .on('click', '#rs_panel .rs_rx_bdel', rxDeleteSel)
+        .on('click', '#rs_panel .rs_rx_bclear', () => {
+            rx.sel.clear();
+            rxRender();
+        })
+        .on('change', '#rs_panel .rs_rx_bmove', function () { rxMoveSel(this.value); })
         .on('click', '#rs_panel .rs_chip', function () {
             $(this).toggleClass('rs_on');
             rxTest();

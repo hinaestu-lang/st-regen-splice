@@ -1623,3 +1623,23 @@
     color: var(--rs-accent);
     border-color: var(--rs-accent);
 }
+
+#rs_panel .rs_rx_act {
+    display: none;
+}
+
+#rs_panel .rs_rx_bmove {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: 13px;
+}
+
+#rs_panel .rs_rx_bdel {
+    flex: none;
+    margin: 0;
+    padding: 6px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    color: #d9534f;
+}
