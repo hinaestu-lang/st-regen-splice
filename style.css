@@ -1642,7 +1642,40 @@
     cursor: pointer;
 }
 
-#rs_panel .rs_pz_head .rs_rx_scope {
+#rs_panel .rs_rx_tabs {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 10px;
+    background: var(--rs-soft);
+}
+
+#rs_panel .rs_rx_tabs span {
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+#rs_panel .rs_rx_tabs span.rs_on {
+    opacity: 1;
+    font-weight: 600;
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--rs-accent);
+}
+
+#rs_panel .rs_rx_namebar {
+    display: none;
+    padding: 0 12px 8px;
+}
+
+#rs_panel .rs_rx_namebar.rs_on {
+    display: flex;
+}
+
+#rs_panel .rs_rx_namebar .rs_rx_scope {
     flex: 1;
     max-width: none;
 }

@@ -1903,14 +1903,14 @@ function ensureShell() {
     <div class="rs_set"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
-        <div class="rs_pickbtn rs_rx_scope"></div>
-        <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入正则 json"><input type="file" class="rs_rx_file" accept=".json,application/json" multiple hidden></label>
-        <div class="rs_icon rs_rx_add fa-solid fa-plus" title="新建"></div>
+        <div class="rs_rx_tabs"><span data-t="g">全局</span><span data-t="p">预设</span><span data-t="c">角色</span></div>
+        <div class="rs_bar_spacer"></div>
         <div class="rs_icon rs_rx_undo fa-solid fa-rotate-left" title="撤回"></div>
         <div class="rs_icon rs_rx_redo fa-solid fa-rotate-right" title="重做"></div>
         <div class="menu_button rs_rx_save">保存</div>
       </div>
-      <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"><div class="rs_icon rs_rx_all fa-solid fa-check-double" title="全选列表里的"></div></div>
+      <div class="rs_bar rs_rx_namebar"><div class="rs_pickbtn rs_rx_scope"></div></div>
+      <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"><div class="rs_icon rs_rx_all fa-solid fa-check-double" title="全选列表里的"></div><label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入正则 json"><input type="file" class="rs_rx_file" accept=".json,application/json" multiple hidden></label><div class="rs_icon rs_rx_add fa-solid fa-plus" title="新建"></div></div>
       <div class="rs_bar rs_pz_act rs_rx_act">
         <span class="rs_pz_count rs_rx_count"></span>
         <div class="rs_pickbtn rs_rx_bmove">移到…</div>
@@ -3362,7 +3362,7 @@ const RX_FLAGS = [['markdownOnly', '只改显示'], ['promptOnly', '只改发送
 const RX_MACRO = [[0, '不替换宏'], [1, '宏原样替换'], [2, '宏转义后替换']];
 const RX_UNDO = 50;
 
-const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set(), pick: null, unfold: new Set() };
+const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set(), pick: null, unfold: new Set(), last: {} };
 
 function rxBlank() {
     return {
@@ -3400,7 +3400,8 @@ async function rxScopes() {
 async function rxOpenPick(mode) {
     rx.pick = { mode, o: await rxScopes() };
     $('#rs_panel .rs_rx_pick_q').val('');
-    $('#rs_panel .rs_rx_pick_title').text(mode === 'scope' ? '查看哪里的正则' : '移到哪里');
+    $('#rs_panel .rs_rx_pick_title').text(mode === 'scope' ? (rx.scope[0] === 'p' ? '选预设' : '选角色') : '移到哪里');
+    $('#rs_panel .rs_rx_pick_q').attr('placeholder', mode === 'scope' ? '搜索名字' : '搜索预设或角色');
     $('#rs_panel .rs_rx').addClass('rs_rx_picking');
     rxRenderPick();
 }
@@ -3416,6 +3417,16 @@ function rxRenderPick() {
     const q = String($('#rs_panel .rs_rx_pick_q').val() || '').trim().toLowerCase();
     const skip = pk.mode === 'scope' ? null : rx.scope;
     const row = (v, label) => `<div class="rs_pz_item" data-v="${escapeHtml(v)}"><div class="rs_pz_row${v === rx.scope ? ' rs_pz_sel' : ''}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(label)}</span></div></div></div></div>`;
+    if (pk.mode === 'scope') {
+        const t = rx.scope[0];
+        const list = (t === 'p' ? pk.o.presets : pk.o.chars).slice();
+        const cur = t === 'p' ? pk.o.curP : pk.o.curC;
+        list.sort((x, y) => (y.id === cur) - (x.id === cur));
+        const labels = nameLabels(list, cur);
+        $('#rs_panel .rs_rx_pick_list').html(list.filter(x => !q || labels.get(x.id).toLowerCase().includes(q)).map(x => row(x.id, labels.get(x.id))).join('')
+            || '<div class="rs_empty">没有符合的</div>');
+        return;
+    }
     const group = (g, title, list, curMark) => {
         const items = list.filter(x => x.id !== skip).sort((x, y) => (y.id === curMark) - (x.id === curMark));
         const labels = nameLabels(items, curMark);
@@ -3470,8 +3481,25 @@ function rxRun(script, text) {
     });
 }
 
-function rxFillScope() {
-    $('#rs_panel .rs_rx_scope').text(rxScopeName(rx.scope));
+async function rxFillScope() {
+    const t = rx.scope === 'g' ? 'g' : rx.scope[0];
+    $('#rs_panel .rs_rx_tabs span').each(function () { $(this).toggleClass('rs_on', this.dataset.t === t); });
+    $('#rs_panel .rs_rx_namebar').toggleClass('rs_on', t !== 'g');
+    if (t === 'g') return;
+    const o = await rxScopes();
+    const list = t === 'p' ? o.presets : o.chars;
+    $('#rs_panel .rs_rx_scope').text(nameLabels(list, t === 'p' ? o.curP : o.curC).get(rx.scope) || rxScopeName(rx.scope));
+}
+
+async function rxSetType(t) {
+    if (t === 'g') return rxChangeScope('g');
+    if (rx.scope.startsWith(t + ':')) return;
+    const o = await rxScopes();
+    const list = t === 'p' ? o.presets : o.chars;
+    const cur = t === 'p' ? o.curP : o.curC;
+    const v = [cur, rx.last[t]].find(x => x && list.some(y => y.id === x)) || list[0]?.id;
+    if (!v) return toastr.info(t === 'p' ? '没有预设' : '还没有角色卡');
+    await rxChangeScope(v);
 }
 
 function rxRowHtml(s) {
@@ -3588,6 +3616,7 @@ async function rxImport(files) {
 
 async function rxChangeScope(scope) {
     if (scope === rx.scope || (rx.dirty && !(await askConfirm('正则还有改动没保存，切换会丢掉，继续吗？')))) return;
+    if (scope !== 'g') rx.last[scope[0]] = scope;
     await rxLoad(scope);
     rxFillScope();
     rxRender();
@@ -3925,6 +3954,7 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_pz_card .rs_pz_card_btn', function () { pzCardAct(this); })
         .on('click', '#rs_panel .rs_pz_insert', () => pzInsert())
         .on('click', '#rs_panel .rs_rx_scope', () => rxOpenPick('scope'))
+        .on('click', '#rs_panel .rs_rx_tabs span', function () { rxSetType(this.dataset.t); })
         .on('click', '#rs_panel .rs_rx_bmove', () => rxOpenPick('bmove'))
         .on('click', '#rs_panel .rs_rx_move', () => rxOpenPick('move'))
         .on('click', '#rs_panel .rs_rx_pick_close', rxClosePick)
