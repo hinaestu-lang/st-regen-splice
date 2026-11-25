@@ -11,19 +11,12 @@ const DEFAULTS = {
     ballImageSize: 600,
     ballShape: 'square',
     splitRatio: 0.4,
+    pzRatio: 0.45,
     snapKeep: 30,
     lastKind: 'msg',
     findExclude: '',
-    readerTheme: 'paper',
-    readerColors: null,
-    readerFont: 19,
-    readerIndent: false,
-    readerShowTime: true,
     readerMarkdown: true,
-    readerQuote: true,
     readerHideCode: true,
-    readerBook: '',
-    readerSign: '',
     readerBody: 'content',
     readerHide: 'think thinking',
     libMax: 500,
@@ -912,12 +905,27 @@ async function savedTarget(key, initial, rest) {
     return { refs: await buildRefs(key, initial), key, ref: 0, initial, saveLabel: '保存', closeAfterSave: false, ...rest };
 }
 
-async function charTarget(field = 'description') {
-    const ch = currentChar();
+function nameOpts(list, cur, curMark) {
+    const count = new Map();
+    list.forEach(x => count.set(x.name, (count.get(x.name) || 0) + 1));
+    return list.map(x => {
+        const dup = count.get(x.name) > 1 ? `（${escapeHtml(String(x.id).replace(/^c:/, '').replace(/\.[^.]+$/, ''))}）` : '';
+        const mark = x.id === curMark ? ' · 当前' : '';
+        return `<option value="${escapeHtml(x.id)}" ${x.id === cur ? 'selected' : ''}>${escapeHtml(x.name)}${dup}${mark}</option>`;
+    }).join('');
+}
+
+const charList = () => (ctx().characters || []).filter(c => c?.avatar).map(c => ({ id: c.avatar, name: String(c.name ?? c.avatar) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+
+async function charTarget(field = 'description', avatar = null) {
+    const cur = currentChar();
+    const ch = (avatar && ctx().characters.find(c => c.avatar === avatar)) || cur || ctx().characters.find(c => c?.avatar);
     if (!ch) {
-        toastr.warning('先打开一个角色的单人聊天');
+        toastr.warning('还没有角色卡');
         return null;
     }
+    const isCur = ch === cur;
     const alts = Array.isArray(ch.data?.alternate_greetings) ? ch.data.alternate_greetings : [];
     const altMatch = String(field).match(/^alt:(\d+|new)$/);
     const altIndex = altMatch ? (altMatch[1] === 'new' ? alts.length : Number(altMatch[1])) : -1;
@@ -943,8 +951,10 @@ async function charTarget(field = 'description') {
     return savedTarget(key, initial, {
         kind: 'char',
         field,
+        avatar: ch.avatar,
         subtitle: escapeHtml(ch.name),
-        pickers: `<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
+        pickers: `<select class="rs_pick text_pole" data-pick="charwho">${nameOpts(charList(), ch.avatar, cur?.avatar)}</select>
+<select class="rs_pick text_pole" data-pick="char">${opts}</select>`,
         saveLabel: field === 'alt:new' ? '新建' : '保存',
         save: async function (text) {
             if (isAlt) {
@@ -969,7 +979,7 @@ async function charTarget(field = 'description') {
             ch.data = ch.data || {};
             ch.data[f] = text;
             if (!dataOnly) ch[f] = text;
-            if (selector) $(selector).val(text);
+            if (selector && isCur) $(selector).val(text);
             await addSnaps(key, initial, text);
             toastr.success('角色卡已保存');
             return true;
@@ -977,26 +987,56 @@ async function charTarget(field = 'description') {
     });
 }
 
-async function personaTarget() {
+async function personaInfo() {
+    const pu = ctx().powerUserSettings || {};
+    let cur = null;
+    try { cur = (await import('/script.js')).user_avatar || null; } catch { }
+    const list = Object.entries(pu.personas || {}).map(([id, name]) => ({ id, name: String(name ?? id) }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+    return { pu, cur, list };
+}
+
+async function personaTarget(avatar = null) {
     const c = ctx();
-    const $box = $('#persona_description');
-    if (!$box.length) {
+    const { pu, cur, list } = await personaInfo();
+    const id = avatar || cur || list[0]?.id || null;
+    const isCur = !id || id === cur;
+    if (isCur && !$('#persona_description').length) {
         toastr.warning('找不到用户人设');
         return null;
     }
-    const initial = String($box.val() ?? '');
-    const key = `persona:${c.name1}`;
+    const name = id ? (pu.personas?.[id] ?? c.name1) : c.name1;
+    const initial = String((isCur ? $('#persona_description').val() : pu.persona_descriptions?.[id]?.description) ?? '');
+    const key = id ? `persona:${id}` : `persona:${name}`;
+    if (id && !list.some(x => x.id !== id && x.name === name)) await adoptSnaps(`persona:${name}`, key);
     return savedTarget(key, initial, {
         kind: 'persona',
-        subtitle: escapeHtml(c.name1),
-        pickers: '',
+        avatar: id,
+        subtitle: escapeHtml(name),
+        pickers: list.length > 1 ? `<select class="rs_pick text_pole" data-pick="persona">${nameOpts(list, id, cur)}</select>` : '',
         save: async text => {
-            $('#persona_description').val(text).trigger('input');
+            if (isCur) $('#persona_description').val(text).trigger('input');
+            else {
+                pu.persona_descriptions = pu.persona_descriptions || {};
+                pu.persona_descriptions[id] = { ...(pu.persona_descriptions[id] || {}), description: text };
+                c.saveSettingsDebounced();
+            }
             await addSnaps(key, initial, text);
             toastr.success('用户人设已保存');
             return true;
         },
     });
+}
+
+async function adoptSnaps(from, to) {
+    for (const k of [from, 'ver:' + from]) {
+        const old = await idbGet(k);
+        if (!old?.length) continue;
+        const nk = k === from ? to : 'ver:' + to;
+        const mine = (await idbGet(nk)) || [];
+        await idbPut(nk, k === from ? [...old, ...mine].sort((x, y) => x.time - y.time) : [...old, ...mine]);
+        await idbPut(k, []);
+    }
 }
 
 function worldNames() {
@@ -1461,7 +1501,7 @@ function clearSel() {
 }
 
 function onSentenceTap(el) {
-    const box = el.closest('.rs_ref_pane, .rs_reader_body');
+    const box = el.closest('.rs_ref_pane');
     const g = el.dataset.g;
     const i = Number(el.dataset.i);
     if (!sel || sel.box !== box || sel.g !== g || i < sel.a - 1 || i > sel.b + 1) {
@@ -1489,10 +1529,7 @@ function onSentenceTap(el) {
 function placeToolbar() {
     const $box = $(sel.box);
     $box.find('.rs_tb').remove();
-    const isReader = $box.hasClass('rs_reader_body');
-    const btns = isReader
-        ? [['fav', '收藏'], ['copy', '复制'], ['edit', '编辑这楼']]
-        : [['ins', '插入'], ['fav', '收藏'], ['copy', '复制']];
+    const btns = [['ins', '插入'], ['fav', '收藏'], ['copy', '复制']];
     $box.append(`<div class="rs_tb">${btns.map(([k, t]) => `<div class="rs_tb_btn" data-act="${k}">${t}</div>`).join('')}</div>`);
 }
 
@@ -1513,32 +1550,18 @@ async function copyText(text) {
 function onToolbarAct(act) {
     const spans = selSpans();
     const text = spans.map((_, e) => e.textContent).get().join('');
-    const isReader = $(sel.box).hasClass('rs_reader_body');
-    const floor = isReader ? Number(spans.first().closest('.rs_floor').data('id')) : null;
     if (act === 'ins') {
         spans.each((_, e) => state.used.add(e.dataset.k));
         clearSel();
         insertSentence(text);
         return;
     }
-    if (act === 'fav') collect(text, isReader ? `阅读 第 ${floor} 楼` : sourceLabel());
+    if (act === 'fav') collect(text, sourceLabel());
     if (act === 'copy') copyText(text);
     clearSel();
-    if (act === 'edit') switchTarget(async () => msgTarget(floor));
 }
 
-const READER_CHUNK = 30;
-const reader = { from: 0, hits: [], cur: -1, undo: [] };
-
 const tagNames = str => String(str || '').split(/[\s,，、]+/).map(x => x.replace(/[<>/]/g, '').trim()).filter(x => /^[\w-]+$/.test(x));
-
-const READER_PRESETS = {
-    paper: { name: '米白', bg: '#f5f4ee', text: '#262626', quote: '#4f7d4a', italic: '#5a5a5a', muted: '#9b9a92' },
-    sage: { name: '青绿', bg: '#d4ddd0', text: '#1f2d3b', quote: '#477443', italic: '#4b5a55', muted: '#7b8a80' },
-    dark: { name: '夜黑', bg: '#1c1c21', text: '#ece3cc', quote: '#d4b26a', italic: '#b9b3a5', muted: '#8d877a' },
-    navy: { name: '藏蓝', bg: '#232f78', text: '#eef0fb', quote: '#ffffff', italic: '#a9b3e6', muted: '#8a94cf' },
-};
-const COLOR_KEYS = [['bg', '底色'], ['text', '正文'], ['quote', '对话'], ['italic', '斜体'], ['muted', '次要']];
 
 function readerDisplay(raw, opt = {}) {
     raw = String(raw ?? '');
@@ -1598,319 +1621,12 @@ function readerDisplay(raw, opt = {}) {
     return { text, map, fmt, shown };
 }
 
-function floorAvatar(m) {
-    if (m.force_avatar) return m.force_avatar;
-    const ch = !m.is_user && currentChar();
-    return ch?.avatar ? `/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}` : '';
-}
-
-function floorTime(m) {
-    const t = m.send_date;
-    if (!t) return '';
-    const d = new Date(t);
-    if (isNaN(d)) return String(t);
-    const p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-const QUOTE_OPEN = '“「『"';
-const QUOTE_CLOSE = '”」』"';
-
-function floorHtml(id) {
-    const m = ctx().chat[id];
-    if (!m) return '';
-    const d = readerDisplay(m.mes);
-    const hitAt = new Int32Array(d.text.length).fill(-1);
-    reader.hits.forEach((h, hi) => {
-        if (h.id !== id) return;
-        d.map.forEach((rawPos, i) => {
-            if (rawPos >= h.a && rawPos < h.b) hitAt[i] = hi;
-        });
-    });
-
-    let body = '';
-    let off = 0;
-    d.text.split('\n').forEach((line, pi) => {
-        if (line.trim()) {
-            let inQuote = false;
-            let pos = off;
-            const quoteOn = settings().readerQuote;
-            const spans = splitSentences(line).map((sen, si) => {
-                let html = '';
-                let runKey = null;
-                let run = '';
-                const flush = () => {
-                    if (!run) return;
-                    const [q, f, h] = runKey.split('|');
-                    const cls = [q === '1' && 'rs_rq', f & 1 && 'rs_ri', f & 2 && 'rs_rb', f & 4 && 'rs_rs', h !== '-1' && 'rs_rhit'].filter(Boolean).join(' ');
-                    html += cls ? `<span class="${cls}"${h !== '-1' ? ` data-h="${h}"` : ''}>${escapeHtml(run)}</span>` : escapeHtml(run);
-                    run = '';
-                };
-                for (let k = 0; k < sen.length; k++) {
-                    const ch = sen[k];
-                    const idx = pos + k;
-                    let q = inQuote;
-                    if (!inQuote && QUOTE_OPEN.includes(ch)) inQuote = q = true;
-                    else if (inQuote && QUOTE_CLOSE.includes(ch)) inQuote = false;
-                    const key = `${q && quoteOn ? 1 : 0}|${d.fmt[idx]}|${hitAt[idx]}`;
-                    if (key !== runKey) {
-                        flush();
-                        runKey = key;
-                    }
-                    run += ch;
-                }
-                flush();
-                pos += sen.length;
-                return `<span class="rs_s" data-g="${id}-${pi}" data-i="${si}">${html}</span>`;
-            }).join('');
-            body += `<p>${spans}</p>`;
-        }
-        off += line.length + 1;
-    });
-
-    const s = settings();
-    const av = floorAvatar(m);
-    const initial = escapeHtml((m.name || '?').slice(0, 1));
-    const time = s.readerShowTime ? floorTime(m) : '';
-    const book = String(s.readerBook || '').trim();
-    const sign = String(s.readerSign || '').trim();
-    return `
-<section class="rs_floor ${m.is_system ? 'rs_floor_hidden' : ''}" data-id="${id}">
-  <div class="rs_floor_head">
-    ${av ? `<img class="rs_floor_av" src="${escapeHtml(av)}" alt="" loading="lazy">` : ''}
-    <div class="rs_floor_av rs_floor_av_none"${av ? ' hidden' : ''}>${initial}</div>
-    <div class="rs_floor_name">${escapeHtml(m.name || '')}${m.is_system ? '<span class="rs_floor_tag">已隐藏</span>' : ''}</div>
-    <div class="rs_floor_meta">第 ${id} 楼${time ? `　${escapeHtml(time)}` : ''}</div>
-  </div>
-  <div class="rs_floor_text">${body || '<p class="rs_floor_empty">（这一楼没有可显示的文字）</p>'}</div>
-  ${book || sign ? `<div class="rs_floor_src">${book ? `<div>/ ${escapeHtml(book)} · 第 ${id} 楼</div>` : ''}${sign ? `<div class="rs_floor_sign">${escapeHtml(sign)}</div>` : ''}</div>` : ''}
-</section>`;
-}
-
-const readerFontSize = () => Math.min(28, Math.max(13, parseInt(settings().readerFont) || DEFAULTS.readerFont));
-
-function readerColors() {
-    const s = settings();
-    if (s.readerTheme === 'follow') return null;
-    return { ...(READER_PRESETS[s.readerTheme] || READER_PRESETS.paper), ...(s.readerColors || {}) };
-}
-
-function applyReaderStyle() {
-    const s = settings();
-    const $b = $('#rs_panel .rs_reader_body');
-    const colors = readerColors();
-    $b.toggleClass('rs_rd_follow', !colors).toggleClass('rs_rd_indent', !!s.readerIndent);
-    COLOR_KEYS.forEach(([k]) => $b[0].style.setProperty(`--rd-${k}`, colors ? colors[k] : ''));
-    $b.css('font-size', readerFontSize() + 'px');
-    $('#rs_panel .rs_rd_bar .rs_bar_title').text(String(s.readerBook || '').trim() || `共 ${ctx().chat.length} 楼`);
-    syncReaderSetUI();
-}
-
-function toHex(css) {
-    css = String(css);
-    const m = css.match(/-?\d*\.?\d+/g);
-    if (!m || m.length < 3) return '#888888';
-    const scale = css.startsWith('color(') ? 255 : 1;
-    return '#' + m.slice(0, 3).map(x => Math.max(0, Math.min(255, Math.round(Number(x) * scale))).toString(16).padStart(2, '0')).join('');
-}
-
-function computedReaderColors() {
-    const $b = $('#rs_panel .rs_reader_body');
-    if (!$b.length) return null;
-    const probe = name => {
-        const el = document.createElement('span');
-        el.style.color = `var(--rd-${name})`;
-        $b[0].appendChild(el);
-        const v = getComputedStyle(el).color;
-        el.remove();
-        return toHex(v);
-    };
-    const bg = getComputedStyle($('#rs_panel')[0]).backgroundColor;
-    return { bg: toHex(bg), text: probe('text'), quote: probe('quote'), italic: probe('italic'), muted: probe('muted') };
-}
-
-function syncReaderSetUI() {
-    const s = settings();
-    const colors = readerColors() || computedReaderColors();
-    $('#rs_panel .rs_rd_sw').each(function () { $(this).toggleClass('rs_on', this.dataset.p === s.readerTheme); });
-    COLOR_KEYS.forEach(([k]) => $(`#rs_panel .rs_rd_color[data-k="${k}"]`).val(colors?.[k] || '#888888'));
-    $('#rs_panel .rs_rd_fs').text(readerFontSize());
-    $('#rs_panel .rs_rd_indent_cb').prop('checked', !!s.readerIndent);
-    $('#rs_panel .rs_rd_time_cb').prop('checked', !!s.readerShowTime);
-    $('#rs_panel .rs_rd_cb').each(function () { this.checked = !!s[this.dataset.k]; });
-    $('#rs_panel .rs_rd_text').each(function () {
-        if (document.activeElement !== this) this.value = s[this.dataset.k] ?? '';
-    });
-}
-
-function setReaderOption(key, value) {
-    settings()[key] = value;
-    ctx().saveSettingsDebounced();
-    applyReaderStyle();
-}
-
-function renderReader() {
-    const chat = ctx().chat;
-    let html = reader.from > 0 ? `<div class="rs_rd_more">加载更早的 ${Math.min(READER_CHUNK, reader.from)} 楼（前面还有 ${reader.from} 楼）</div>` : '';
-    for (let id = reader.from; id < chat.length; id++) html += floorHtml(id);
-    clearSel();
-    $('#rs_panel .rs_reader_body').html(html).find('img.rs_floor_av').on('error', function () {
-        $(this).next('.rs_floor_av_none').prop('hidden', false);
-        $(this).remove();
-    });
-}
-
-function openReader() {
-    const chat = ctx().chat;
-    reader.from = Math.max(0, chat.length - READER_CHUNK);
-    reader.hits = [];
-    reader.cur = -1;
-    reader.undo = [];
-    $('#rs_panel .rs_rd_ex').val(settings().findExclude);
-    applyReaderStyle();
-    if (boxOpenReaderFind()) readerSearch();
-    renderReader();
-    const body = $('#rs_panel .rs_reader_body')[0];
-    body.scrollTop = body.scrollHeight;
-}
-
-function loadEarlier() {
-    const body = $('#rs_panel .rs_reader_body')[0];
-    const before = body.scrollHeight - body.scrollTop;
-    reader.from = Math.max(0, reader.from - READER_CHUNK);
-    renderReader();
-    body.scrollTop = body.scrollHeight - before;
-}
-
-function scrollToFloor(id, hitIndex) {
-    if (id < reader.from) {
-        reader.from = Math.max(0, id - 3);
-        renderReader();
-    }
-    const body = $('#rs_panel .rs_reader_body')[0];
-    const target = hitIndex !== undefined
-        ? body.querySelector(`.rs_rhit[data-h="${hitIndex}"]`)
-        : body.querySelector(`.rs_floor[data-id="${id}"]`);
-    if (!target) return;
-    const top = target.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
-    body.scrollTop = Math.max(0, top - (hitIndex !== undefined ? body.clientHeight / 3 : 8));
-}
-
-async function jumpToFloor() {
-    const n = await askInput(`跳到第几楼？（0 到 ${ctx().chat.length - 1}）`, '');
-    if (n === null || n === undefined || n === false || String(n).trim() === '') return;
-    const id = parseInt(n);
-    if (!Number.isInteger(id) || id < 0 || id >= ctx().chat.length) {
-        toastr.warning('没有这一楼');
-        return;
-    }
-    scrollToFloor(id);
-}
-
-const boxOpenReaderFind = () => $('#rs_panel .rs_rd_find').is(':visible');
-const rdQuery = () => String($('#rs_panel .rs_rd_q').val() ?? '');
-
-function readerSearch() {
-    const q = rdQuery();
-    reader.hits = [];
-    reader.cur = -1;
-    if (q) {
-        ctx().chat.forEach((m, id) => {
-            const raw = String(m.mes ?? '');
-            const skip = excludedSpans(raw);
-            const { shown } = readerDisplay(raw);
-            let i = raw.indexOf(q);
-            while (i >= 0) {
-                const end = i + q.length;
-                const visible = shown.subarray(i, end).every(x => x);
-                if (visible && !skip.some(([a, b]) => i < b && end > a)) reader.hits.push({ id, a: i, b: end });
-                i = raw.indexOf(q, end);
-            }
-        });
-    }
-    const floors = new Set(reader.hits.map(h => h.id)).size;
-    $('#rs_panel .rs_rd_info').text(q ? `${reader.hits.length} 处${floors ? `，${floors} 楼` : ''}` : '');
-}
-
-function showHit(i) {
-    reader.cur = i;
-    const h = reader.hits[i];
-    scrollToFloor(h.id, i);
-    $('#rs_panel .rs_rhit_cur').removeClass('rs_rhit_cur');
-    $(`#rs_panel .rs_rhit[data-h="${i}"]`).addClass('rs_rhit_cur');
-}
-
-function readerNext() {
-    if (!reader.hits.length) {
-        toastr.info('没有找到');
-        return;
-    }
-    showHit((reader.cur + 1) % reader.hits.length);
-}
-
 function setFloorText(id, text) {
     const c = ctx();
     const m = c.chat[id];
     m.mes = text;
     if (Array.isArray(m.swipes) && m.swipes.length) m.swipes[m.swipe_id ?? 0] = text;
     c.updateMessageBlock(id, m);
-}
-
-async function readerReplace(all) {
-    if (!reader.hits.length) {
-        toastr.info('没有找到');
-        return;
-    }
-    const rep = String($('#rs_panel .rs_rd_r').val() ?? '');
-    const chat = ctx().chat;
-    let targets;
-    if (all) {
-        const floors = new Set(reader.hits.map(h => h.id)).size;
-        if (!(await askConfirm(`要在 ${floors} 楼里替换 ${reader.hits.length} 处吗？可以用「撤销替换」恢复`))) return;
-        targets = reader.hits;
-    } else {
-        if (reader.cur < 0) {
-            readerNext();
-            return;
-        }
-        targets = [reader.hits[reader.cur]];
-    }
-    const byFloor = new Map();
-    targets.forEach(h => byFloor.set(h.id, [...(byFloor.get(h.id) || []), h]));
-    const batch = [];
-    byFloor.forEach((hs, id) => {
-        let text = String(chat[id].mes);
-        batch.push({ id, old: text });
-        hs.sort((x, y) => y.a - x.a).forEach(h => { text = text.slice(0, h.a) + rep + text.slice(h.b); });
-        setFloorText(id, text);
-    });
-    reader.undo.push(batch);
-    await ctx().saveChat();
-
-    const last = targets[0];
-    readerSearch();
-    renderReader();
-    if (all) {
-        toastr.success(`已替换 ${targets.length} 处`);
-    } else {
-        const next = reader.hits.findIndex(h => h.id > last.id || (h.id === last.id && h.a >= last.a + rep.length));
-        if (next >= 0) showHit(next);
-        else scrollToFloor(last.id);
-    }
-}
-
-async function readerUndo() {
-    const batch = reader.undo.pop();
-    if (!batch) {
-        toastr.info('没有可以撤销的替换');
-        return;
-    }
-    batch.forEach(({ id, old }) => setFloorText(id, old));
-    await ctx().saveChat();
-    readerSearch();
-    renderReader();
-    scrollToFloor(batch[0].id);
-    toastr.success('已撤销上一次替换');
 }
 
 const DRAFT_DELAY = 600;
@@ -2027,8 +1743,9 @@ const snap = () => {
 };
 const isDirty = () => {
     const t = state.target;
-    if (!t || t.kind === 'reader') return false;
+    if (!t) return false;
     if (t.kind === 'preset') return !!pz.tgt?.dirty;
+    if (t.kind === 'regex') return rx.dirty;
     return !!bodyEl() && bodyEl().value !== t.initial;
 };
 
@@ -2043,8 +1760,8 @@ function ensureShell() {
         <option value="char">角色卡</option>
         <option value="persona">用户人设</option>
         <option value="world">世界书</option>
-        <option value="reader">阅读</option>
         <option value="preset">预设缝合</option>
+        <option value="regex">正则</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
       <div class="rs_ball_toggle" title="显示或隐藏悬浮球"><span>悬浮球</span><i></i></div>
@@ -2116,6 +1833,7 @@ function ensureShell() {
         </div>
         <div class="rs_pz_list rs_pz_src_list"></div>
       </div>
+      <div class="rs_grip"><span></span></div>
       <div class="rs_bar rs_pz_act">
         <span class="rs_pz_count"></span>
         <select class="rs_pz_pos text_pole"></select>
@@ -2132,65 +1850,21 @@ function ensureShell() {
           <input type="text" class="rs_pz_q" data-side="tgt" placeholder="搜索名称或内容">
           <select class="rs_pz_cat text_pole" data-side="tgt"></select>
         </div>
-        <div class="rs_pz_list rs_pz_tgt_list"></div>
+        <div class="rs_pz_list rs_pz_tgt_list" data-drop="pz"></div>
       </div>
       <div class="rs_pz_ed"></div>
     </div>
-    <div class="rs_reader">
-      <div class="rs_bar rs_rd_bar">
-        <div class="rs_bar_title"></div>
-        <div class="rs_icon rs_rd_set_btn fa-solid fa-sliders" title="排版和颜色"></div>
-        <div class="rs_icon rs_rd_jump fa-solid fa-location-arrow" title="跳到第几楼"></div>
-        <div class="rs_icon rs_rd_find_btn fa-solid fa-magnifying-glass" title="查找替换"></div>
+    <div class="rs_rx">
+      <div class="rs_bar rs_pz_head">
+        <select class="rs_rx_scope text_pole"></select>
+        <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入正则 json"><input type="file" class="rs_rx_file" accept=".json,application/json" multiple hidden></label>
+        <div class="rs_icon rs_rx_add fa-solid fa-plus" title="新建"></div>
+        <div class="rs_icon rs_rx_undo fa-solid fa-rotate-left" title="撤回"></div>
+        <div class="menu_button rs_rx_save">保存</div>
       </div>
-      <div class="rs_rd_set">
-        <div class="rs_rd_row">
-          <span class="rs_rd_label">配色</span>
-          ${Object.entries(READER_PRESETS).map(([k, v]) => `<div class="rs_rd_sw" data-p="${k}" style="background:${v.bg};color:${v.quote}">${v.name}</div>`).join('')}
-          <div class="rs_rd_sw rs_rd_sw_follow" data-p="follow">跟随</div>
-        </div>
-        <div class="rs_rd_row rs_rd_colors">
-          ${COLOR_KEYS.map(([k, t]) => `<label class="rs_rd_color_item"><input type="color" class="rs_rd_color" data-k="${k}"><span>${t}</span></label>`).join('')}
-        </div>
-        <div class="rs_rd_row">
-          <span class="rs_rd_label">字号</span>
-          <div class="rs_icon rs_rd_fontbtn" data-d="-1">A-</div>
-          <span class="rs_rd_fs"></span>
-          <div class="rs_icon rs_rd_fontbtn" data-d="1">A+</div>
-          <label class="checkbox_label"><input type="checkbox" class="rs_rd_indent_cb"> 段首缩进</label>
-          <label class="checkbox_label"><input type="checkbox" class="rs_rd_time_cb"> 显示日期</label>
-        </div>
-        <div class="rs_rd_row">
-          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerMarkdown"> Markdown（**粗体** *斜体* ~~删除线~~）</label>
-          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerQuote"> 对话染色</label>
-          <label class="checkbox_label"><input type="checkbox" class="rs_rd_cb" data-k="readerHideCode"> 隐藏代码块</label>
-        </div>
-        <div class="rs_find_row">
-          <input type="text" class="rs_rd_text" data-k="readerBook" placeholder="书名">
-          <input type="text" class="rs_rd_text" data-k="readerSign" placeholder="落款，显示在书名下面">
-        </div>
-        <div class="rs_find_row">
-          <input type="text" class="rs_rd_text" data-k="readerBody" placeholder="只看这个标签里的正文，如 content">
-          <input type="text" class="rs_rd_text" data-k="readerHide" placeholder="不显示的标签，如 think">
-        </div>
-      </div>
-      <div class="rs_rd_find">
-        <div class="rs_find_row">
-          <input type="text" class="rs_rd_q" placeholder="在整个聊天里查找">
-          <span class="rs_find_info rs_rd_info"></span>
-          <div class="menu_button rs_rd_next">下一个</div>
-        </div>
-        <div class="rs_find_row">
-          <input type="text" class="rs_rd_r" placeholder="替换成（留空就是删除）">
-          <div class="menu_button rs_rd_one">替换</div>
-          <div class="menu_button rs_rd_all">全部</div>
-        </div>
-        <div class="rs_find_row">
-          <input type="text" class="rs_rd_ex" placeholder="跳过这些标签里的内容，比如 count think">
-          <div class="menu_button rs_rd_undo">撤销替换</div>
-        </div>
-      </div>
-      <div class="rs_reader_body"></div>
+      <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"></div>
+      <div class="rs_pz_list rs_rx_list" data-drop="rx"></div>
+      <div class="rs_rx_ed"></div>
     </div>
     <div class="rs_body_wrap">
       <div class="rs_body_back" aria-hidden="true"></div>
@@ -2222,6 +1896,11 @@ function fitToViewport() {
 
 function applySplitRatio() {
     if (gripDrag) return;
+    const pzSec = $('#rs_panel .rs_pz > .rs_pz_sec').first();
+    if (pzSec.is(':visible')) {
+        const pr = Math.min(0.8, Math.max(0.15, Number(settings().pzRatio) || DEFAULTS.pzRatio));
+        pzSec.css('height', Math.round(pzSec.parent().height() * pr) + 'px');
+    }
     const ratio = Math.min(0.8, Math.max(0.15, Number(settings().splitRatio) || DEFAULTS.splitRatio));
     const r = $('#rs_overlay').hasClass('rs_kb') ? Math.min(ratio, KEYBOARD_REF_RATIO) : ratio;
     $('#rs_panel .rs_ref_pane').css('height', Math.round($('#rs_panel').height() * r) + 'px');
@@ -2232,27 +1911,18 @@ function showTarget(t) {
     ensureShell();
     clearSel();
     if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
-    $('#rs_panel').toggleClass('rs_mode_reader', t.kind === 'reader').toggleClass('rs_mode_preset', t.kind === 'preset');
-    if (t.kind === 'preset') {
+    if (state.target?.kind === 'regex' && t.kind !== 'regex') rxReset();
+    $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex');
+    if (t.kind === 'preset' || t.kind === 'regex') {
         state.target = t;
-        $('#rs_panel .rs_kind').val('preset');
+        $('#rs_panel .rs_kind').val(t.kind);
         $('#rs_panel .rs_title').text(t.subtitle);
-        if (settings().lastKind !== 'preset') {
-            settings().lastKind = 'preset';
+        if (settings().lastKind !== t.kind) {
+            settings().lastKind = t.kind;
             ctx().saveSettingsDebounced();
         }
-        openStitch();
-        return;
-    }
-    if (t.kind === 'reader') {
-        state.target = t;
-        $('#rs_panel .rs_kind').val('reader');
-        $('#rs_panel .rs_title').text(t.subtitle);
-        if (settings().lastKind !== 'reader') {
-            settings().lastKind = 'reader';
-            ctx().saveSettingsDebounced();
-        }
-        openReader();
+        if (t.kind === 'preset') openStitch();
+        else openRegex();
         return;
     }
     Object.assign(state, { target: t, ref: t.ref, used: new Set(), caret: null, undo: [], redo: [], typing: false });
@@ -2479,27 +2149,94 @@ function doRedo() {
     updateUndoButtons();
 }
 
-function onGripDown(e) {
-    gripDrag = { y: e.clientY, h: $('#rs_panel .rs_ref_pane')[0].offsetHeight };
-    e.target.setPointerCapture?.(e.pointerId);
+const GRIP_KEYS = { rs_ref_pane: 'splitRatio', rs_pz_sec: 'pzRatio' };
+
+function onGripDown(e, grip) {
+    const el = grip.previousElementSibling;
+    const key = Object.keys(GRIP_KEYS).find(c => el.classList.contains(c));
+    gripDrag = { y: e.clientY, h: el.offsetHeight, el, total: el.parentElement.offsetHeight, key: GRIP_KEYS[key] };
+    grip.setPointerCapture?.(e.pointerId);
 }
 function onGripMove(e) {
-    if (!gripDrag) return;
-    const total = $('#rs_panel').height();
-    const h = Math.min(total * 0.8, Math.max(total * 0.15, gripDrag.h + e.clientY - gripDrag.y));
-    $('#rs_panel .rs_ref_pane').css('height', h + 'px');
+    const d = gripDrag;
+    if (!d) return;
+    d.el.style.height = Math.min(d.total * 0.8, Math.max(d.total * 0.15, d.h + e.clientY - d.y)) + 'px';
 }
 function onGripUp() {
-    if (!gripDrag) return;
+    const d = gripDrag;
+    if (!d) return;
     gripDrag = null;
-    if ($('#rs_overlay').hasClass('rs_kb')) return;
-    settings().splitRatio = $('#rs_panel .rs_ref_pane').height() / $('#rs_panel').height();
+    if (d.key === 'splitRatio' && $('#rs_overlay').hasClass('rs_kb')) return;
+    settings()[d.key] = d.el.offsetHeight / d.el.parentElement.offsetHeight;
     ctx().saveSettingsDebounced();
+}
+
+const DRAG_EDGE = 44;
+const DRAG_SPEED = 12;
+let rowDrag = null;
+
+function onDragDown(e, handle) {
+    const row = handle.closest('[data-k]');
+    if (!row) return;
+    e.preventDefault();
+    rowDrag = { row, list: row.parentElement, over: null, after: false, y: e.clientY, raf: 0 };
+    row.classList.add('rs_dragging');
+    handle.setPointerCapture?.(e.pointerId);
+}
+
+function dragMark() {
+    const d = rowDrag;
+    let over = null;
+    let after = false;
+    for (const el of d.list.querySelectorAll(':scope > [data-k]')) {
+        const b = el.getBoundingClientRect();
+        over = el;
+        after = d.y >= b.top + b.height / 2;
+        if (!after) break;
+    }
+    d.list.querySelectorAll('.rs_drop_before, .rs_drop_after').forEach(el => el.classList.remove('rs_drop_before', 'rs_drop_after'));
+    if (over === d.row) over = null;
+    if (over) over.classList.add(after ? 'rs_drop_after' : 'rs_drop_before');
+    Object.assign(d, { over, after });
+}
+
+function dragScroll() {
+    const d = rowDrag;
+    if (!d) return;
+    const b = d.list.getBoundingClientRect();
+    const edge = Math.min(DRAG_EDGE, b.height / 6);
+    const v = d.y < b.top + edge ? -DRAG_SPEED : d.y > b.bottom - edge ? DRAG_SPEED : 0;
+    if (!v) {
+        d.raf = 0;
+        return;
+    }
+    d.list.scrollTop += v;
+    dragMark();
+    d.raf = requestAnimationFrame(dragScroll);
+}
+
+function onDragMove(e) {
+    const d = rowDrag;
+    if (!d) return;
+    d.y = e.clientY;
+    dragMark();
+    if (!d.raf) d.raf = requestAnimationFrame(dragScroll);
+}
+
+function onDragUp() {
+    const d = rowDrag;
+    if (!d) return;
+    rowDrag = null;
+    cancelAnimationFrame(d.raf);
+    d.row.classList.remove('rs_dragging');
+    d.over?.classList.remove('rs_drop_before', 'rs_drop_after');
+    if (d.over) DROPS[d.list.dataset.drop]?.(d.row.dataset.k, d.over.dataset.k, d.after);
 }
 
 async function closePanel(force = false, keepDraft = false) {
     if (!force && isDirty() && !(await askConfirm('有改动还没保存，确定关闭吗？'))) return;
     pzReset();
+    rxReset();
     if (keepDraft) saveDraftNow();
     else clearDraft();
     clearTimeout(state.typingTimer);
@@ -2548,8 +2285,8 @@ async function onSave() {
 
 async function reloadCurrent() {
     const t = state.target;
-    if (t.kind === 'char') showTarget(await charTarget(t.field));
-    else if (t.kind === 'persona') showTarget(await personaTarget());
+    if (t.kind === 'char') showTarget(await charTarget(t.field, t.avatar));
+    else if (t.kind === 'persona') showTarget(await personaTarget(t.avatar));
     else if (t.kind === 'world') showTarget(await worldTarget(t.book, $('#rs_panel .rs_pick[data-pick="entry"]').val()));
 }
 
@@ -2561,14 +2298,6 @@ const PZ_PREVIEW = 46;
 const PZ_UNDO = 50;
 const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#-]{2,}|^\s*[【\[〔「『].{1,24}[】\]〕」』]\s*$/;
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
-const PZ_CATS = [
-    ['破限', /破限|越狱|jailbreak|免责|无限制|不受限|审查|道德约束|nsfw|安全限制|安全准则|拒绝回答/i],
-    ['思维链', /\bcot\b|思维链|思考(?:过程|步骤|链)|<think|thinking|推理步骤|step.?by.?step/i],
-    ['文风', /文风|文笔|笔触|风格|描写|叙事|句式|八股|用词|修辞|prose|style/i],
-    ['格式', /格式|输出|字数|状态栏|小剧场|选项|排版|format|<content>|标签/i],
-    ['角色', /\{\{char\}\}|\{\{user\}\}|角色|人设|扮演|persona/i],
-    ['世界观', /世界观|世界设定|背景设定|lore|world/i],
-];
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
 const pz = { src: null, tgt: null, file: null, sel: new Set(), tl: [], ed: null };
@@ -2649,26 +2378,16 @@ function pzFromPreset(preset) {
     return pzClassify(list);
 }
 
-const pzIsDivider = e => !e.marker && !pzNorm(e.content) && PZ_DIVIDER.test(e.name);
-
-function pzGuess(e) {
-    for (const src of [e.name, String(e.content).slice(0, 800)]) {
-        for (const [cat, re] of PZ_CATS) if (re.test(src)) return cat;
-    }
-    return '其他';
-}
+const pzBlank = t => !String(t ?? '').replace(/<!--[\s\S]*?-->|\{\{\/\/[\s\S]*?\}\}/g, '').trim();
+const pzIsDivider = e => !e.marker && pzBlank(e.content) && (PZ_DIVIDER.test(e.name) || /\p{Extended_Pictographic}|[⬇⬆↓↑▽△]/u.test(e.name));
+const pzCatName = n => n.replace(PZ_DECOR, ' ').replace(/[\p{Extended_Pictographic}️‍⬇⬆↓↑▽△]/gu, ' ').replace(/\s+/g, ' ').trim();
 
 function pzClassify(list) {
-    const grouped = list.filter(pzIsDivider).length >= 2;
-    let group = '未分组';
+    let group = '';
     list.forEach(e => {
         e.div = pzIsDivider(e);
-        if (e.marker) e.cat = '系统占位';
-        else if (!grouped) e.cat = pzGuess(e);
-        else {
-            if (e.div) group = e.name.replace(PZ_DECOR, ' ').replace(/\s+/g, ' ').trim() || group;
-            e.cat = group;
-        }
+        if (e.div) group = pzCatName(e.name) || e.name.trim() || group;
+        e.cat = group;
     });
     return list;
 }
@@ -2882,8 +2601,8 @@ function pzFilter(list, side) {
 function pzFillCats(list, side) {
     const $s = $(`#rs_panel .rs_pz_cat[data-side="${side}"]`);
     const cur = $s.val();
-    const cats = [...new Set(list.map(e => e.cat))];
-    $s.html('<option value="">全部分类</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join(''));
+    const cats = [...new Set(list.filter(e => e.div).map(e => e.cat))];
+    $s.toggle(cats.length > 0).html('<option value="">全部分类</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join(''));
     $s.val(cats.includes(cur) ? cur : '');
 }
 
@@ -2891,9 +2610,9 @@ function pzRowHtml(e, side, other) {
     const st = other ? (pzSame(other, e) ? 'same' : 'diff') : side === 'src' ? 'new' : '';
     const sel = side === 'src' && pz.sel.has(e.key);
     const tag = st ? `<span class="rs_pz_tag rs_pz_${st}">${{ new: '新', diff: '不同', same: '相同' }[st]}</span>` : '';
-    const cat = e.div ? '' : `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>`;
+    const cat = e.div || !e.cat ? '' : `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>`;
     const pv = e.marker ? '系统占位，没有内容' : e.content.replace(/\s+/g, ' ').trim().slice(0, PZ_PREVIEW);
-    const lead = side === 'src' ? `<span class="rs_pz_cb fa-${sel ? 'solid fa-square-check' : 'regular fa-square'}"></span>` : '';
+    const lead = side === 'src' ? '<span class="rs_cb"></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
     const tail = side === 'src'
         ? '<span class="rs_icon rs_pz_edit fa-solid fa-pen" title="编辑"></span>'
         : `<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
@@ -2950,8 +2669,7 @@ function pzToggleSel(key, on) {
     if (on ?? !pz.sel.has(key)) pz.sel.add(key);
     else pz.sel.delete(key);
     const sel = pz.sel.has(key);
-    $(`#rs_panel .rs_pz_src_list .rs_pz_row[data-k="${CSS.escape(key)}"]`).toggleClass('rs_pz_sel', sel)
-        .find('.rs_pz_cb').attr('class', `rs_pz_cb fa-${sel ? 'solid fa-square-check' : 'regular fa-square'}`);
+    $(`#rs_panel .rs_pz_src_list .rs_pz_row[data-k="${CSS.escape(key)}"]`).toggleClass('rs_pz_sel', sel);
 }
 
 function pzSelectAll() {
@@ -3024,6 +2742,23 @@ function pzInsert() {
     pz.sel.clear();
     pzChanged();
     toastr.success([add && `插入 ${add} 条`, rep && `替换 ${rep} 条`].filter(Boolean).join('，') + '，记得点保存');
+}
+
+function pzMove(key, toKey, after) {
+    const a = pz.tl.find(x => x.key === key);
+    const b = pz.tl.find(x => x.key === toKey);
+    if (!a || !b) return;
+    pzPush();
+    const order = pzOrder(pz.tgt.preset).order;
+    const i = order.findIndex(o => o.identifier === a.id);
+    const item = i >= 0 ? order.splice(i, 1)[0] : { identifier: a.id, enabled: false };
+    const j = order.findIndex(o => o.identifier === b.id);
+    order.splice(j < 0 ? order.length : j + (after ? 1 : 0), 0, item);
+    if (i >= 0 && order[i] === item) {
+        pz.tgt.undo.pop();
+        return;
+    }
+    pzChanged();
 }
 
 function pzToggleEnabled(key) {
@@ -3277,7 +3012,330 @@ async function openStitch() {
     if (!pz.src) await pzSetSource('cur');
     await pzFillSelects();
     pzRender();
+    applySplitRatio();
 }
+
+const RX_PLACES = [[1, '用户输入'], [2, 'AI 输出'], [3, '快捷命令'], [5, '世界书'], [6, '推理']];
+const RX_FLAGS = [['markdownOnly', '只改显示'], ['promptOnly', '只改发送'], ['runOnEdit', '编辑时运行']];
+const RX_MACRO = [[0, '不替换宏'], [1, '宏原样替换'], [2, '宏转义后替换']];
+const RX_UNDO = 50;
+
+const rx = { scope: 'g', list: [], undo: [], dirty: false, ed: null };
+
+function rxBlank() {
+    return {
+        id: pzUid(), scriptName: '新正则', findRegex: '', replaceString: '', trimStrings: [], placement: [2],
+        disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    };
+}
+
+function rxStore(scope = rx.scope) {
+    const c = ctx();
+    if (scope === 'g') return Array.isArray(c.extensionSettings.regex) ? c.extensionSettings.regex : [];
+    const ch = c.characters.find(x => x.avatar === scope.slice(2));
+    return ch?.data?.extensions?.regex_scripts || [];
+}
+
+function rxLoad(scope) {
+    Object.assign(rx, { scope, list: structuredClone(rxStore(scope)), undo: [], dirty: false });
+}
+
+function rxRegex(str) {
+    const m = String(str).match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
+    try { return m ? new RegExp(m[1], m[2]) : new RegExp(str); } catch { return null; }
+}
+
+function rxRun(script, text) {
+    const re = rxRegex(script.findRegex);
+    if (!re || !script.findRegex) return null;
+    const trim = v => (script.trimStrings || []).reduce((a, t) => t ? a.split(t).join('') : a, String(v ?? ''));
+    return text.replace(re, (...args) => {
+        const groups = [];
+        for (let i = 1; i < args.length && typeof args[i] !== 'number'; i++) groups.push(args[i]);
+        return String(script.replaceString ?? '').replace(/\{\{match\}\}|\$&|\$(\d+)/gi, (x, n) => trim(n === undefined ? args[0] : groups[n - 1]));
+    });
+}
+
+function rxFillScope() {
+    const cur = currentChar()?.avatar;
+    const chars = charList().map(x => ({ ...x, id: 'c:' + x.id }));
+    $('#rs_panel .rs_rx_scope').html('<option value="g">全局正则</option>'
+        + (chars.length ? `<optgroup label="角色正则">${nameOpts(chars, rx.scope, cur && 'c:' + cur)}</optgroup>` : ''))
+        .val(rx.scope);
+}
+
+function rxRowHtml(s) {
+    const places = RX_PLACES.filter(([v]) => (s.placement || []).includes(v)).map(([, t]) => t);
+    const flags = RX_FLAGS.slice(0, 2).filter(([k]) => s[k]).map(([, t]) => t);
+    const tags = [...places, ...flags].map(t => `<span class="rs_pz_cat_tag">${escapeHtml(t)}</span>`).join('');
+    const bad = s.findRegex && !rxRegex(s.findRegex) ? '<span class="rs_pz_tag rs_pz_diff">表达式有误</span>' : '';
+    return `<div class="rs_pz_row${s.disabled ? ' rs_pz_off' : ''}" data-k="${escapeHtml(s.id)}"><span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(s.scriptName || '（无名）')}</span>${bad}${tags}</div><div class="rs_pz_pv rs_rx_pv">${escapeHtml(s.findRegex || '（没写表达式）')}</div></div><span class="rs_icon rs_rx_toggle fa-solid ${s.disabled ? 'fa-toggle-off' : 'fa-toggle-on'}" title="启用或关闭"></span></div>`;
+}
+
+function rxRender() {
+    const q = String($('#rs_panel .rs_rx_q').val() || '').trim().toLowerCase();
+    const rows = rx.list.filter(s => !q || String(s.scriptName).toLowerCase().includes(q) || String(s.findRegex).toLowerCase().includes(q));
+    $('#rs_panel .rs_rx_list').html(rows.length ? rows.map(rxRowHtml).join('')
+        : `<div class="rs_empty">${rx.list.length ? '没有符合的正则' : '这里还没有正则，可以点 ＋ 新建，或者点文件图标导入 json'}</div>`);
+    $('#rs_panel .rs_rx_undo').toggleClass('rs_off', !rx.undo.length);
+    $('#rs_panel .rs_rx_save').toggleClass('rs_off', !rx.dirty).text(rx.dirty ? '保存' : '已保存');
+}
+
+function rxPush() {
+    rx.undo.push(structuredClone(rx.list));
+    if (rx.undo.length > RX_UNDO) rx.undo.shift();
+}
+
+function rxChanged() {
+    rx.dirty = true;
+    rxRender();
+}
+
+function rxUndo() {
+    const s = rx.undo.pop();
+    if (!s) return;
+    rx.list = s;
+    rxChanged();
+}
+
+function rxToggle(id) {
+    const s = rx.list.find(x => x.id === id);
+    if (!s) return;
+    rxPush();
+    s.disabled = !s.disabled;
+    rxChanged();
+}
+
+function rxMove(id, toId, after) {
+    const i = rx.list.findIndex(x => x.id === id);
+    if (i < 0 || !rx.list.some(x => x.id === toId)) return;
+    rxPush();
+    const [s] = rx.list.splice(i, 1);
+    rx.list.splice(rx.list.findIndex(x => x.id === toId) + (after ? 1 : 0), 0, s);
+    if (rx.list[i] === s) {
+        rx.undo.pop();
+        return;
+    }
+    rxChanged();
+}
+
+async function rxImport(files) {
+    const add = [];
+    for (const f of files) {
+        try {
+            const data = JSON.parse(await f.text());
+            const arr = Array.isArray(data) ? data : Array.isArray(data?.regex_scripts) ? data.regex_scripts : [data];
+            arr.filter(x => x && typeof x.findRegex === 'string').forEach(x => add.push({ ...rxBlank(), ...structuredClone(x), id: pzUid() }));
+        } catch {
+            toastr.warning(`「${f.name}」不是正则 json`);
+        }
+    }
+    if (!add.length) return toastr.info('没有读到正则');
+    rxPush();
+    rx.list.push(...add);
+    rxChanged();
+    toastr.success(`导入 ${add.length} 条，记得点保存`);
+}
+
+async function rxChangeScope(scope) {
+    if (rx.dirty && !(await askConfirm('正则还有改动没保存，切换会丢掉，继续吗？'))) {
+        $('#rs_panel .rs_rx_scope').val(rx.scope);
+        return;
+    }
+    rxLoad(scope);
+    rxRender();
+}
+
+async function rxWrite(scope, list) {
+    const c = ctx();
+    const merge = cur => {
+        const old = new Map(cur.map(x => [x.id, x]));
+        return structuredClone(list).map(x => old.has(x.id) ? Object.assign(old.get(x.id), x) : x);
+    };
+    if (scope === 'g') {
+        if (!Array.isArray(c.extensionSettings.regex)) c.extensionSettings.regex = [];
+        const arr = c.extensionSettings.regex;
+        arr.splice(0, arr.length, ...merge(arr));
+        c.saveSettingsDebounced();
+        return true;
+    }
+    const avatar = scope.slice(2);
+    const chid = c.characters.findIndex(x => x.avatar === avatar);
+    if (chid < 0) {
+        toastr.error('找不到这个角色');
+        return false;
+    }
+    const ch = c.characters[chid];
+    const next = merge(ch.data?.extensions?.regex_scripts || []);
+    if (typeof c.writeExtensionField === 'function') await c.writeExtensionField(chid, 'regex_scripts', next);
+    else {
+        if (!(await postCharUpdate({ avatar, data: { extensions: { regex_scripts: next } } }))) return false;
+        ch.data = ch.data || {};
+        ch.data.extensions = { ...(ch.data.extensions || {}), regex_scripts: next };
+    }
+    const ext = c.extensionSettings;
+    if (next.length) {
+        if (!Array.isArray(ext.character_allowed_regex)) ext.character_allowed_regex = [];
+        if (!ext.character_allowed_regex.includes(avatar)) {
+            ext.character_allowed_regex.push(avatar);
+            c.saveSettingsDebounced();
+        }
+    }
+    return true;
+}
+
+async function rxRefreshChat() {
+    const c = ctx();
+    try { if (c.getCurrentChatId?.()) await c.reloadCurrentChat?.(); } catch { }
+}
+
+async function rxSave() {
+    if (!rx.dirty) return;
+    const scope = rx.scope;
+    const before = structuredClone(rxStore(scope));
+    const $btn = $('#rs_panel .rs_rx_save').addClass('rs_off');
+    let ok = false;
+    try {
+        ok = await rxWrite(scope, rx.list);
+    } catch (e) {
+        console.error('[重生成拼接] 保存正则失败', e);
+        toastr.error('保存正则失败');
+    }
+    $btn.removeClass('rs_off');
+    if (!ok) return;
+    rx.dirty = false;
+    rxRender();
+    await rxRefreshChat();
+    toastr.success('正则已保存，点这里撤回', '', {
+        onclick: async () => {
+            if (!(await rxWrite(scope, before))) return;
+            if (state.target?.kind === 'regex' && rx.scope === scope && !rx.dirty) {
+                rxLoad(scope);
+                rxRender();
+            }
+            await rxRefreshChat();
+            toastr.info('已撤回');
+        },
+    });
+}
+
+function rxOpenEd(id) {
+    const s = id ? rx.list.find(x => x.id === id) : rxBlank();
+    if (!s) return;
+    rx.ed = { id: id || null, item: structuredClone(s) };
+    const chip = (k, v, t, on) => `<span class="rs_chip${on ? ' rs_on' : ''}" data-${k}="${v}">${t}</span>`;
+    const at = id ? rx.list.findIndex(x => x.id === id) : -1;
+    $('#rs_panel .rs_rx_ed').html(`
+<div class="rs_bar"><div class="rs_bar_title">${id ? '编辑正则' : '新建正则'}${at >= 0 ? `<span class="rs_pz_ed_pos">第 ${at + 1} / ${rx.list.length} 条</span>` : ''}</div><div class="rs_icon rs_rx_ed_act fa-solid fa-xmark" data-a="close" title="关闭"></div></div>
+<div class="rs_rx_form">
+  <input type="text" class="rs_rx_f rs_pz_ed_name" data-f="scriptName" placeholder="名称">
+  <div class="rs_rx_lb">查找</div>
+  <textarea class="rs_rx_f rs_rx_code" data-f="findRegex" rows="2" spellcheck="false" placeholder="/表达式/标志，比如 /<think>[\\s\\S]*?<\\/think>/g"></textarea>
+  <div class="rs_rx_err"></div>
+  <div class="rs_rx_lb">替换为</div>
+  <textarea class="rs_rx_f rs_rx_code" data-f="replaceString" rows="3" spellcheck="false" placeholder="留空就是删掉；{{match}} 或 $1 引用匹配内容"></textarea>
+  <div class="rs_rx_lb">修剪掉</div>
+  <textarea class="rs_rx_f rs_rx_code" data-f="trimStrings" rows="2" spellcheck="false" placeholder="一行一个，替换前从匹配内容里去掉"></textarea>
+  <div class="rs_rx_lb">作用于</div>
+  <div class="rs_chips">${RX_PLACES.map(([v, t]) => chip('p', v, t, (s.placement || []).includes(v))).join('')}</div>
+  <div class="rs_rx_lb">选项</div>
+  <div class="rs_chips">${RX_FLAGS.map(([k, t]) => chip('o', k, t, !!s[k])).join('')}</div>
+  <div class="rs_rx_line">
+    <select class="rs_rx_f text_pole" data-f="substituteRegex">${RX_MACRO.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>
+    <span>深度</span><input type="number" class="rs_rx_f" data-f="minDepth" placeholder="最小" min="-1"><span>~</span><input type="number" class="rs_rx_f" data-f="maxDepth" placeholder="最大" min="0">
+  </div>
+  <div class="rs_rx_lb">试一试</div>
+  <textarea class="rs_rx_test" rows="3" spellcheck="false" placeholder="贴一段文字看看替换效果"></textarea>
+  <div class="rs_rx_out"></div>
+</div>
+<div class="rs_pz_ed_foot">
+  ${id ? '<div class="rs_icon rs_rx_ed_act fa-solid fa-trash-can" data-a="del" title="删除"></div><div class="rs_icon rs_rx_ed_act fa-solid fa-clone" data-a="dup" title="复制一份"></div>' : ''}
+  <div class="rs_bar_spacer"></div>
+  <div class="menu_button rs_rx_ed_act rs_pz_ed_ok" data-a="ok">${id ? '确定' : '添加'}</div>
+</div>`);
+    $('#rs_panel .rs_rx_f').each(function () {
+        const f = this.dataset.f;
+        const v = s[f];
+        this.value = f === 'trimStrings' ? (v || []).join('\n') : f === 'substituteRegex' ? String(Number(v) || 0) : v ?? '';
+    });
+    $('#rs_panel .rs_rx').addClass('rs_rx_editing');
+    rxTest();
+}
+
+function rxCloseEd() {
+    rx.ed = null;
+    $('#rs_panel .rs_rx').removeClass('rs_rx_editing');
+    $('#rs_panel .rs_rx_ed').empty();
+}
+
+function rxEdValues() {
+    const s = rx.ed.item;
+    $('#rs_panel .rs_rx_f').each(function () {
+        const f = this.dataset.f;
+        const v = String(this.value);
+        if (f === 'trimStrings') s[f] = v.split('\n').filter(x => x);
+        else if (f === 'substituteRegex') s[f] = Number(v) || 0;
+        else if (f === 'minDepth' || f === 'maxDepth') s[f] = v === '' ? null : Number(v);
+        else s[f] = v;
+    });
+    s.placement = $('#rs_panel .rs_chip[data-p].rs_on').map(function () { return Number(this.dataset.p); }).get();
+    $('#rs_panel .rs_chip[data-o]').each(function () { s[this.dataset.o] = $(this).hasClass('rs_on'); });
+    return s;
+}
+
+function rxTest() {
+    if (!rx.ed) return;
+    const s = rxEdValues();
+    const bad = s.findRegex && !rxRegex(s.findRegex);
+    $('#rs_panel .rs_rx_err').text(bad ? '表达式写得不对' : '').toggle(!!bad);
+    const text = String($('#rs_panel .rs_rx_test').val() || '');
+    const out = text ? rxRun(s, text) : null;
+    $('#rs_panel .rs_rx_out').toggle(!!text).text(out === null ? '' : out === text ? '（没有匹配到）' : out || '（替换后是空的）');
+}
+
+async function rxEdAct(a) {
+    const ed = rx.ed;
+    if (!ed) return;
+    if (a === 'close') return rxCloseEd();
+    const s = rxEdValues();
+    if (a === 'ok') {
+        if (!String(s.scriptName).trim()) return toastr.warning('给正则起个名字');
+        const i = rx.list.findIndex(x => x.id === ed.id);
+        if (i >= 0 && JSON.stringify(rx.list[i]) === JSON.stringify(s)) return rxCloseEd();
+        rxPush();
+        if (i >= 0) rx.list[i] = structuredClone(s);
+        else rx.list.push(structuredClone(s));
+        rxCloseEd();
+        rxChanged();
+    } else if (a === 'dup') {
+        const i = rx.list.findIndex(x => x.id === ed.id);
+        rxPush();
+        rx.list.splice(i + 1, 0, { ...structuredClone(s), id: pzUid(), scriptName: `${s.scriptName} 副本` });
+        rxCloseEd();
+        rxChanged();
+    } else if (a === 'del') {
+        if (!(await askConfirm(`删掉正则「${s.scriptName}」？保存前可以撤回`))) return;
+        rxPush();
+        rx.list = rx.list.filter(x => x.id !== ed.id);
+        rxCloseEd();
+        rxChanged();
+    }
+}
+
+function rxReset() {
+    rx.ed = null;
+    rx.dirty = false;
+    rx.undo = [];
+}
+
+function openRegex() {
+    rxCloseEd();
+    rxLoad(rx.scope === 'g' || rx.scope.startsWith('c:') && ctx().characters.some(x => 'c:' + x.avatar === rx.scope) ? rx.scope : 'g');
+    rxFillScope();
+    rxRender();
+}
+
+const DROPS = { pz: pzMove, rx: rxMove };
 
 const LOADERS = {
     msg: async () => {
@@ -3291,13 +3349,6 @@ const LOADERS = {
     char: () => charTarget(),
     persona: () => personaTarget(),
     world: () => worldTarget(),
-    reader: async () => {
-        if (!ctx().chat.length) {
-            toastr.warning('当前聊天还没有消息');
-            return null;
-        }
-        return { kind: 'reader', subtitle: '整个聊天', initial: '' };
-    },
     preset: async () => {
         if (!(await pzPM())) {
             toastr.warning('这个版本的酒馆读不到预设');
@@ -3305,6 +3356,7 @@ const LOADERS = {
         }
         return { kind: 'preset', subtitle: '对话补全预设', initial: '' };
     },
+    regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
 };
 
 async function openFromBall() {
@@ -3341,10 +3393,32 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_pz_tgt_list .rs_pz_row', function (e) {
             const key = this.dataset.k;
+            if ($(e.target).closest('.rs_drag').length) return;
             if ($(e.target).closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
             pzOpenEd('tgt', key);
         })
         .on('click', '#rs_panel .rs_pz_insert', pzInsert)
+        .on('change', '#rs_panel .rs_rx_scope', function () { rxChangeScope(this.value); })
+        .on('change', '#rs_panel .rs_rx_file', function () {
+            const fs = [...(this.files || [])];
+            this.value = '';
+            if (fs.length) rxImport(fs);
+        })
+        .on('input', '#rs_panel .rs_rx_q', rxRender)
+        .on('click', '#rs_panel .rs_rx_add', () => rxOpenEd(null))
+        .on('click', '#rs_panel .rs_rx_undo', rxUndo)
+        .on('click', '#rs_panel .rs_rx_save', rxSave)
+        .on('click', '#rs_panel .rs_rx_list .rs_pz_row', function (e) {
+            if ($(e.target).closest('.rs_drag').length) return;
+            if ($(e.target).closest('.rs_rx_toggle').length) return rxToggle(this.dataset.k);
+            rxOpenEd(this.dataset.k);
+        })
+        .on('click', '#rs_panel .rs_chip', function () {
+            $(this).toggleClass('rs_on');
+            rxTest();
+        })
+        .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
+        .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
         .on('click', '#rs_panel .rs_pz_undo', pzUndo)
         .on('click', '#rs_panel .rs_pz_save', pzSave)
@@ -3442,7 +3516,9 @@ function bindPanelEvents() {
             const val = $(this).val();
             const prev = $(this).find('option[selected]').val();
             let ok = true;
-            if (pick === 'char') ok = await switchTarget(() => charTarget(val));
+            if (pick === 'char') ok = await switchTarget(() => charTarget(val, state.target.avatar));
+            if (pick === 'charwho') ok = await switchTarget(() => charTarget(state.target.field?.startsWith('alt:') ? 'description' : state.target.field, val));
+            if (pick === 'persona') ok = await switchTarget(() => personaTarget(val));
             if (pick === 'book') ok = await switchTarget(() => worldTarget(val));
             if (pick === 'entry') ok = await switchTarget(() => worldTarget(state.target.book, val));
             if (!ok && prev !== undefined) $(this).val(prev);
@@ -3465,80 +3541,13 @@ function bindPanelEvents() {
             e.stopPropagation();
             onToolbarAct(this.dataset.act);
         })
-        .on('click', '#rs_panel .rs_ref_pane, #rs_panel .rs_reader_body', clearSel)
+        .on('click', '#rs_panel .rs_ref_pane', clearSel)
         .on('focus', '#rs_panel .rs_body_text', function () { this.parentElement.classList.add('rs_focus'); })
         .on('blur', '#rs_panel .rs_body_text', function () {
             this.parentElement.classList.remove('rs_focus');
             renderBack();
         })
         .on('click', '#rs_panel .rs_lib_btn', () => toggleBox('lib'))
-        .on('click', '#rs_panel .rs_rd_set_btn', function () {
-            const $set = $('#rs_panel .rs_rd_set').toggle();
-            $('#rs_panel .rs_rd_find').hide();
-            $('#rs_panel .rs_rd_find_btn').removeClass('rs_on');
-            $(this).toggleClass('rs_on', $set.is(':visible'));
-            syncReaderSetUI();
-        })
-        .on('click', '#rs_panel .rs_rd_sw', function () {
-            settings().readerColors = null;
-            setReaderOption('readerTheme', this.dataset.p);
-        })
-        .on('input', '#rs_panel .rs_rd_color', function () {
-            const s = settings();
-            if (s.readerTheme === 'follow') {
-                s.readerColors = computedReaderColors();
-                s.readerTheme = 'paper';
-            }
-            s.readerColors = { ...(s.readerColors || {}), [this.dataset.k]: this.value };
-            setReaderOption('readerColors', s.readerColors);
-        })
-        .on('click', '#rs_panel .rs_rd_fontbtn', function () {
-            setReaderOption('readerFont', readerFontSize() + Number(this.dataset.d));
-        })
-        .on('change', '#rs_panel .rs_rd_indent_cb', function () { setReaderOption('readerIndent', this.checked); })
-        .on('change', '#rs_panel .rs_rd_time_cb', function () {
-            setReaderOption('readerShowTime', this.checked);
-            renderReader();
-        })
-        .on('change', '#rs_panel .rs_rd_cb', function () {
-            setReaderOption(this.dataset.k, this.checked);
-            if (boxOpenReaderFind()) readerSearch();
-            renderReader();
-        })
-        .on('input', '#rs_panel .rs_rd_text', function () {
-            setReaderOption(this.dataset.k, this.value);
-            if (boxOpenReaderFind()) readerSearch();
-            renderReader();
-        })
-        .on('click', '#rs_panel .rs_rd_jump', jumpToFloor)
-        .on('click', '#rs_panel .rs_rd_more', e => {
-            e.stopPropagation();
-            loadEarlier();
-        })
-        .on('click', '#rs_panel .rs_rd_find_btn', function () {
-            $('#rs_panel .rs_rd_set').hide();
-            $('#rs_panel .rs_rd_set_btn').removeClass('rs_on');
-            const $f = $('#rs_panel .rs_rd_find').toggle();
-            $(this).toggleClass('rs_on', $f.is(':visible'));
-            if ($f.is(':visible')) $('#rs_panel .rs_rd_q').trigger('focus');
-            readerSearch();
-            renderReader();
-        })
-        .on('input', '#rs_panel .rs_rd_q', () => {
-            readerSearch();
-            renderReader();
-        })
-        .on('input', '#rs_panel .rs_rd_ex', function () {
-            settings().findExclude = this.value;
-            ctx().saveSettingsDebounced();
-            readerSearch();
-            renderReader();
-        })
-        .on('keydown', '#rs_panel .rs_rd_q', e => { if (e.key === 'Enter') readerNext(); })
-        .on('click', '#rs_panel .rs_rd_next', readerNext)
-        .on('click', '#rs_panel .rs_rd_one', () => readerReplace(false))
-        .on('click', '#rs_panel .rs_rd_all', () => readerReplace(true))
-        .on('click', '#rs_panel .rs_rd_undo', readerUndo)
         .on('click', '#rs_panel .rs_lib_add', collectSelection)
         .on('input', '#rs_panel .rs_lib_q', renderLib)
         .on('click', '#rs_panel .rs_lib_main', function () { useLibItem($(this).closest('.rs_lib_item').data('id')); })
@@ -3550,9 +3559,12 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_undo', doUndo)
         .on('click', '#rs_panel .rs_redo', doRedo)
         .on('click', '#rs_panel .rs_save', onSave)
-        .on('pointerdown', '#rs_panel .rs_grip', e => onGripDown(e.originalEvent))
+        .on('pointerdown', '#rs_panel .rs_grip', e => onGripDown(e.originalEvent, e.currentTarget))
         .on('pointermove', '#rs_panel .rs_grip', e => onGripMove(e.originalEvent))
         .on('pointerup pointercancel', '#rs_panel .rs_grip', onGripUp)
+        .on('pointerdown', '#rs_panel .rs_drag', e => onDragDown(e.originalEvent, e.currentTarget))
+        .on('pointermove', '#rs_panel .rs_drag', e => onDragMove(e.originalEvent))
+        .on('pointerup pointercancel', '#rs_panel .rs_drag', onDragUp)
         .on('change', '#rs_panel .rs_kind', async function () {
             const prev = state.target?.kind;
             const ok = await switchTarget(LOADERS[this.value]);
@@ -3614,11 +3626,9 @@ function clampBall(x, y) {
     const el = document.getElementById('rs_ball');
     const w = el?.offsetWidth || settings().ballSize;
     const h = el?.offsetHeight || settings().ballSize;
-    const top = Math.max(0, ...['#top-settings-holder', '#top-bar'].map(q => document.querySelector(q)?.getBoundingClientRect().bottom || 0));
-    const bottom = document.querySelector('#send_form')?.getBoundingClientRect().top || window.innerHeight;
     return {
         x: Math.min(Math.max(0, x), window.innerWidth - w),
-        y: Math.min(Math.max(top, y), Math.max(top, bottom - h)),
+        y: Math.min(Math.max(0, y), window.innerHeight - h),
     };
 }
 
@@ -3794,6 +3804,7 @@ function renderSettings() {
       <label>八股词表（一行一个；中间隔字用 ……，比如 不是……而是；用 /.../ 包起来是正则）
         <textarea id="rs_cliche_words" class="text_pole" rows="6"></textarea>
       </label>
+      <label>正文标签（“只编辑正文”时只留这个标签里的内容，比如 content）<input type="text" id="rs_body_tag" class="text_pole"></label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
     </div>
   </div>
@@ -3871,6 +3882,10 @@ function renderSettings() {
     $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () { setClicheSetting('clicheOn', this.checked); });
     $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () { setClicheSetting('clicheWhole', this.checked); });
     $('#rs_cliche_words').val(s.clicheWords).on('input', function () { setClicheSetting('clicheWords', this.value); });
+    $('#rs_body_tag').val(s.readerBody).on('input', function () {
+        settings().readerBody = this.value.trim();
+        ctx().saveSettingsDebounced();
+    });
     $('#rs_snap_keep').val(s.snapKeep).on('input', function () {
         settings().snapKeep = Math.max(2, parseInt(this.value) || DEFAULTS.snapKeep);
         ctx().saveSettingsDebounced();
@@ -3913,7 +3928,6 @@ jQuery(() => {
     c.eventSource.on(ev.GENERATION_ENDED, onGenEnded);
     c.eventSource.on(ev.GENERATION_STOPPED, onGenEnded);
     c.eventSource.on(ev.CHAT_CHANGED, () => {
-        if (state.target?.kind === 'reader') openReader();
         pending = null;
         injectButtons();
         if (state.target?.kind === 'msg') {
