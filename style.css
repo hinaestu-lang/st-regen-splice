@@ -1353,3 +1353,27 @@
     width: auto;
     max-width: 40%;
 }
+
+#rs_panel .rs_pz_here {
+    display: none;
+    flex: none;
+    padding: 3px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--rs-accent);
+    color: var(--rs-accent);
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+#rs_panel .rs_pz_picking .rs_pz_here {
+    display: inline-block;
+}
+
+#rs_panel .rs_rx_move {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+    margin: 0;
+    font-size: 13px;
+}

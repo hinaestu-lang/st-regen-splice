@@ -2449,8 +2449,7 @@ function pzFromPreset(preset) {
     return pzClassify(list);
 }
 
-const pzBlank = t => !String(t ?? '').replace(/<!--[\s\S]*?-->|\{\{\/\/[\s\S]*?\}\}/g, '').trim();
-const pzIsDivider = e => !e.marker && pzBlank(e.content) && (PZ_DIVIDER.test(e.name) || /\p{Extended_Pictographic}|[⬇⬆↓↑▽△]/u.test(e.name));
+const pzIsDivider = e => !e.marker && PZ_DIVIDER.test(e.name);
 const pzCatName = n => n.replace(PZ_DECOR, ' ').replace(/[\p{Extended_Pictographic}️‍⬇⬆↓↑▽△]/gu, ' ').replace(/\s+/g, ' ').trim();
 
 function pzClassify(list) {
@@ -2711,7 +2710,7 @@ function pzRowHtml(e, side, other) {
     const lead = side === 'src' ? '<span class="rs_cb"></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
     const tail = side === 'src'
         ? '<span class="rs_icon rs_pz_edit fa-solid fa-pen" title="编辑"></span>'
-        : `<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
+        : `${e.inOrder ? '<span class="rs_pz_here" title="插到这条后面">插到这后</span>' : ''}<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
     const cls = ['rs_pz_row', e.div && 'rs_pz_div', sel && 'rs_pz_sel', side === 'tgt' && !e.enabled && 'rs_pz_off'].filter(Boolean).join(' ');
     return `<div class="${cls}" data-k="${escapeHtml(e.key)}">${lead}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${tag}${cat}</div>${pv ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
 }
@@ -2738,9 +2737,9 @@ function pzRender() {
 
     const $pos = $('#rs_panel .rs_pz_pos');
     const keep = $pos.val();
-    const after = pz.tl.filter(e => e.inOrder);
+    const cats = [...new Set(pz.tl.filter(e => e.div && e.inOrder).map(e => e.cat))];
     $pos.html('<option value="end">插到最后</option><option value="start">插到最前</option>'
-        + (after.length ? `<optgroup label="插在这条后面">${after.map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name || '（无名）')}</option>`).join('')}</optgroup>` : ''));
+        + (cats.length ? `<optgroup label="插到这一类的末尾">${cats.map(c => `<option value="c:${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</optgroup>` : ''));
     $pos.val(keep && $pos.find(`option[value="${CSS.escape(keep)}"]`).length ? keep : 'end');
     pzRenderAct();
 }
@@ -2756,6 +2755,7 @@ function pzRenderAct() {
         else if (!pzSame(o, e)) rep++;
     });
     $('#rs_panel .rs_pz_count').text(picks.length ? `已选 ${picks.length}` : '未选择');
+    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_picking', add + rep > 0);
     $('#rs_panel .rs_pz_insert')
         .text(add || rep ? [add && `插入 ${add}`, rep && `替换 ${rep}`].filter(Boolean).join(' · ') : '插入')
         .toggleClass('rs_off', !(add || rep));
@@ -2794,7 +2794,7 @@ function pzUndo() {
     pzChanged();
 }
 
-function pzInsert() {
+function pzInsert(here) {
     const t = pz.tgt;
     const picks = (pz.src?.entries || []).filter(e => pz.sel.has(e.key));
     if (!t || !picks.length) return;
@@ -2802,7 +2802,11 @@ function pzInsert() {
     const prompts = t.preset.prompts;
     const order = pzOrder(t.preset).order;
     const maps = pzMaps(pz.tl);
-    const pos = $('#rs_panel .rs_pz_pos').val() || 'end';
+    let pos = here || $('#rs_panel .rs_pz_pos').val() || 'end';
+    if (pos.startsWith('c:')) {
+        const inCat = pz.tl.filter(e => e.inOrder && e.cat === pos.slice(2));
+        pos = inCat.length ? inCat[inCat.length - 1].id : 'end';
+    }
     const idx = order.findIndex(o => o.identifier === pos);
     let at = pos === 'start' ? 0 : idx >= 0 ? idx + 1 : order.length;
     let add = 0;
@@ -3125,16 +3129,45 @@ function rxBlank() {
     };
 }
 
-function rxStore(scope = rx.scope) {
+async function rxStore(scope = rx.scope) {
     const c = ctx();
     if (scope === 'g') return Array.isArray(c.extensionSettings.regex) ? c.extensionSettings.regex : [];
+    if (scope.startsWith('p:')) {
+        const pm = await pzPM();
+        if (!pm) return [];
+        const name = scope.slice(2);
+        const live = name === pm.getSelectedPresetName() ? await pzLive(pm) : null;
+        return live?.extensions?.regex_scripts || pzStored(pm, name)?.preset?.extensions?.regex_scripts || [];
+    }
     const ch = c.characters.find(x => x.avatar === scope.slice(2));
     return ch?.data?.extensions?.regex_scripts || [];
 }
 
+async function rxScopes() {
+    const pm = await pzPM();
+    const curP = pm?.getSelectedPresetName();
+    const curC = currentChar()?.avatar;
+    return {
+        presets: pm ? pzNames(pm).map(n => ({ id: 'p:' + n, name: n })) : [],
+        chars: charList().map(x => ({ ...x, id: 'c:' + x.id })),
+        curP: curP && 'p:' + curP,
+        curC: curC && 'c:' + curC,
+    };
+}
+
+async function rxScopeOpts(sel, skip) {
+    const o = await rxScopes();
+    const f = l => l.filter(x => x.id !== skip);
+    return (skip === 'g' ? '' : `<option value="g" ${sel === 'g' ? 'selected' : ''}>全局正则</option>`)
+        + (f(o.presets).length ? `<optgroup label="预设正则">${nameOpts(f(o.presets), sel, o.curP)}</optgroup>` : '')
+        + (f(o.chars).length ? `<optgroup label="角色正则">${nameOpts(f(o.chars), sel, o.curC)}</optgroup>` : '');
+}
+
+const rxScopeName = scope => scope === 'g' ? '全局正则' : scope.startsWith('p:') ? `预设「${scope.slice(2)}」` : `角色「${ctx().characters.find(x => x.avatar === scope.slice(2))?.name ?? scope.slice(2)}」`;
+
 async function rxLoad(scope) {
     if (scope !== 'g') await fullChar(ctx().characters.find(x => x.avatar === scope.slice(2)));
-    Object.assign(rx, { scope, list: structuredClone(rxStore(scope)), undo: [], dirty: false });
+    Object.assign(rx, { scope, list: structuredClone(await rxStore(scope)), undo: [], dirty: false });
 }
 
 function rxRegex(str) {
@@ -3153,12 +3186,8 @@ function rxRun(script, text) {
     });
 }
 
-function rxFillScope() {
-    const cur = currentChar()?.avatar;
-    const chars = charList().map(x => ({ ...x, id: 'c:' + x.id }));
-    $('#rs_panel .rs_rx_scope').html('<option value="g">全局正则</option>'
-        + (chars.length ? `<optgroup label="角色正则">${nameOpts(chars, rx.scope, cur && 'c:' + cur)}</optgroup>` : ''))
-        .val(rx.scope);
+async function rxFillScope() {
+    $('#rs_panel .rs_rx_scope').html(await rxScopeOpts(rx.scope)).val(rx.scope);
 }
 
 function rxRowHtml(s) {
@@ -3256,6 +3285,7 @@ async function rxWrite(scope, list) {
         c.saveSettingsDebounced();
         return true;
     }
+    if (scope.startsWith('p:')) return rxPresetWrite(scope.slice(2), merge(await rxStore(scope)));
     const avatar = scope.slice(2);
     const chid = c.characters.findIndex(x => x.avatar === avatar);
     if (chid < 0) {
@@ -3281,6 +3311,63 @@ async function rxWrite(scope, list) {
     return true;
 }
 
+async function rxPresetWrite(name, list) {
+    const c = ctx();
+    const pm = await pzPM();
+    const st = pm && pzStored(pm, name);
+    if (!st) {
+        toastr.error('找不到这个预设');
+        return false;
+    }
+    const preset = structuredClone(st.preset);
+    preset.extensions = { ...(preset.extensions || {}), regex_scripts: list };
+    const res = await fetch('/api/presets/save', {
+        method: 'POST',
+        headers: c.getRequestHeaders(),
+        body: JSON.stringify({ apiId: 'openai', name, preset }),
+    });
+    if (!res.ok) {
+        toastr.error('保存预设正则失败');
+        return false;
+    }
+    pm.getPresetList().presets[st.idx] = preset;
+    if (name === pm.getSelectedPresetName()) {
+        const live = await pzLive(pm);
+        if (live) live.extensions = { ...(live.extensions || {}), regex_scripts: list };
+    }
+    const ext = c.extensionSettings;
+    if (list.length) {
+        ext.preset_allowed_regex = ext.preset_allowed_regex || {};
+        const arr = ext.preset_allowed_regex.openai = ext.preset_allowed_regex.openai || [];
+        if (!arr.includes(name)) arr.push(name);
+    }
+    c.saveSettingsDebounced();
+    return true;
+}
+
+async function rxMoveTo(scope) {
+    const ed = rx.ed;
+    if (!ed || !scope) return;
+    const s = structuredClone(rxEdValues());
+    if (!String(s.scriptName).trim()) return toastr.warning('给正则起个名字');
+    if (!(await askConfirm(`把「${s.scriptName}」移到${rxScopeName(scope)}？`))) {
+        $('#rs_panel .rs_rx_move').val('');
+        return;
+    }
+    const dest = await rxStore(scope);
+    if (dest.some(x => x.id === s.id)) s.id = pzUid();
+    if (!(await rxWrite(scope, [...structuredClone(dest), s]))) return;
+    if (ed.id) {
+        const stored = await rxStore(rx.scope);
+        if (stored.some(x => x.id === ed.id)) await rxWrite(rx.scope, structuredClone(stored).filter(x => x.id !== ed.id));
+        rx.list = rx.list.filter(x => x.id !== ed.id);
+    }
+    rxCloseEd();
+    rxRender();
+    await rxRefreshChat();
+    toastr.success(`已移到${rxScopeName(scope)}`);
+}
+
 async function rxRefreshChat() {
     const c = ctx();
     try { if (c.getCurrentChatId?.()) await c.reloadCurrentChat?.(); } catch { }
@@ -3289,7 +3376,7 @@ async function rxRefreshChat() {
 async function rxSave() {
     if (!rx.dirty) return;
     const scope = rx.scope;
-    const before = structuredClone(rxStore(scope));
+    const before = structuredClone(await rxStore(scope));
     const $btn = $('#rs_panel .rs_rx_save').addClass('rs_off');
     let ok = false;
     try {
@@ -3316,7 +3403,7 @@ async function rxSave() {
     });
 }
 
-function rxOpenEd(id) {
+async function rxOpenEd(id) {
     const s = id ? rx.list.find(x => x.id === id) : rxBlank();
     if (!s) return;
     rx.ed = { id: id || null, item: structuredClone(s) };
@@ -3347,6 +3434,7 @@ function rxOpenEd(id) {
 </div>
 <div class="rs_pz_ed_foot">
   ${id ? '<div class="rs_icon rs_rx_ed_act fa-solid fa-trash-can" data-a="del" title="删除"></div><div class="rs_icon rs_rx_ed_act fa-solid fa-clone" data-a="dup" title="复制一份"></div>' : ''}
+  <select class="rs_rx_move text_pole"><option value="">移到…</option>${await rxScopeOpts('', rx.scope)}</select>
   <div class="rs_bar_spacer"></div>
   <div class="menu_button rs_rx_ed_act rs_pz_ed_ok" data-a="ok">${id ? '确定' : '添加'}</div>
 </div>`);
@@ -3427,8 +3515,10 @@ function rxReset() {
 
 async function openRegex() {
     rxCloseEd();
-    await rxLoad(rx.scope === 'g' || rx.scope.startsWith('c:') && ctx().characters.some(x => 'c:' + x.avatar === rx.scope) ? rx.scope : 'g');
-    rxFillScope();
+    const o = await rxScopes();
+    const known = rx.scope === 'g' || [...o.presets, ...o.chars].some(x => x.id === rx.scope);
+    await rxLoad(known ? rx.scope : 'g');
+    await rxFillScope();
     rxRender();
 }
 
@@ -3494,9 +3584,10 @@ function bindPanelEvents() {
             const key = this.dataset.k;
             if ($(e.target).closest('.rs_drag').length) return;
             if ($(e.target).closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
+            if ($(e.target).closest('.rs_pz_here').length) return pzInsert(pz.tl.find(x => x.key === key)?.id);
             pzOpenEd('tgt', key);
         })
-        .on('click', '#rs_panel .rs_pz_insert', pzInsert)
+        .on('click', '#rs_panel .rs_pz_insert', () => pzInsert())
         .on('change', '#rs_panel .rs_rx_scope', function () { rxChangeScope(this.value); })
         .on('change', '#rs_panel .rs_rx_file', function () {
             const fs = [...(this.files || [])];
@@ -3518,6 +3609,7 @@ function bindPanelEvents() {
         })
         .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
         .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
+        .on('change', '#rs_panel .rs_rx_move', function () { rxMoveTo(this.value); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
         .on('click', '#rs_panel .rs_pz_undo', pzUndo)
         .on('click', '#rs_panel .rs_pz_save', pzSave)
