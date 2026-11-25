@@ -4414,6 +4414,33 @@ function ccRender() {
 </div>`);
 }
 
+async function ccPost(url, body) {
+    try {
+        return await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body) });
+    } catch (e) {
+        console.error('[重生成拼接] 请求失败', url, e);
+        return null;
+    }
+}
+
+async function ccRemove(x) {
+    const g = !!x.group;
+    const del = () => ccPost(g ? '/api/chats/group/delete' : '/api/chats/delete', g ? { id: x.file_id } : { chatfile: x.file_name, avatar_url: x.avatar });
+    const first = await del();
+    if (first?.ok) return true;
+    const why = first ? await first.text().catch(() => '') : '';
+    if (first?.status !== 404 && !/not\s*found/i.test(why)) return false;
+    const got = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: x.file_id } : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar });
+    const data = got?.ok ? await got.json().catch(() => null) : null;
+    if (Array.isArray(data) && data.length) return false;
+    const stub = [{ user_name: 'User', character_name: x.owner, create_date: Date.now(), chat_metadata: {} }];
+    const saved = await ccPost(g ? '/api/chats/group/save' : '/api/chats/save', g
+        ? { id: x.file_id, chat: stub, force: true }
+        : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar, chat: stub, force: true });
+    if (!saved?.ok) return false;
+    return !!(await del())?.ok;
+}
+
 async function ccDelete() {
     const c = ctx();
     const cur = c.getCurrentChatId?.();
@@ -4424,13 +4451,7 @@ async function ccDelete() {
     if (!go.length || !(await askConfirm(`删掉选中的 ${go.length} 个聊天文件？删了就找不回来`))) return;
     let ok = 0;
     for (const x of go) {
-        const body = x.group ? { id: x.file_id } : { chatfile: x.file_name, avatar_url: x.avatar };
-        try {
-            const res = await fetch(x.group ? '/api/chats/group/delete' : '/api/chats/delete', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify(body) });
-            if (res.ok) ok++;
-        } catch (e) {
-            console.error('[重生成拼接] 删除聊天文件失败', x.file_name, e);
-        }
+        if (await ccRemove(x)) ok++;
     }
     toastr[ok === go.length ? 'success' : 'warning'](`删掉了 ${ok} 个${ok < go.length ? `，${go.length - ok} 个没删成` : ''}`);
     await ccLoad();
