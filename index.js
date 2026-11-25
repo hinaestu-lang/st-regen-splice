@@ -11,6 +11,13 @@ const DEFAULTS = {
     ballImageSize: 600,
     ballShape: 'square',
     splitRatio: 0.4,
+    panelWidth: 720,
+    panelHeight: 94,
+    editFont: 15,
+    accent: '',
+    panelBg: '',
+    panelText: '',
+    dim: 45,
     pzRatio: 0.45,
     snapKeep: 30,
     lastKind: 'msg',
@@ -642,25 +649,15 @@ function countOf(hay, needle) {
     return n;
 }
 
-function sentenceAtTap(e, textEl) {
+function paragraphAtTap(e, textEl) {
     const pos = textPosAt(e.clientX, e.clientY);
     if (!pos || pos.node.nodeType !== Node.TEXT_NODE || !textEl.contains(pos.node)) return null;
     const block = pos.node.parentElement.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6, div') || textEl;
     const scope = textEl.contains(block) ? block : textEl;
-    const pre = document.createRange();
-    pre.setStart(scope, 0);
-    pre.setEnd(pos.node, pos.offset);
-    const at = pre.toString().length;
     const full = scope.textContent;
-    let found = null;
-    eachSentence(full, (sen, a, b) => {
-        if (!found && at >= a && at < b && sen.trim()) found = { a, b, sen };
-    });
-    if (!found) return null;
-    const lead = found.sen.length - found.sen.trimStart().length;
-    const tail = found.sen.length - found.sen.trimEnd().length;
-    const a = found.a + lead;
-    const b = found.b - tail;
+    if (!full.trim()) return null;
+    const a = full.length - full.trimStart().length;
+    const b = full.trimEnd().length;
     const sentence = full.slice(a, b);
     const before = document.createRange();
     before.setStart(textEl, 0);
@@ -792,11 +789,11 @@ function onMessageTap(e) {
     const id = Number(mes?.getAttribute('mesid'));
     const m = ctx().chat[id];
     if (!Number.isInteger(id) || !m) return;
-    const hit = sentenceAtTap(e, textEl);
+    const hit = paragraphAtTap(e, textEl);
     if (!hit) return;
     const span = hit.range && locateInRaw(m.mes, hit.sentence, hit.nth);
     if (!span) {
-        toastr.info('这句被正则改过显示，对不上原文，请用整楼编辑');
+        toastr.info('这段被正则改过显示，对不上原文，请用整楼编辑');
         return;
     }
     const [a, b] = span;
@@ -1769,6 +1766,7 @@ const isDirty = () => {
     if (!t) return false;
     if (t.kind === 'preset') return !!pz.tgt?.dirty;
     if (t.kind === 'regex') return rx.dirty;
+    if (t.kind === 'set') return false;
     return !!bodyEl() && bodyEl().value !== t.initial;
 };
 
@@ -1785,6 +1783,7 @@ function ensureShell() {
         <option value="world">世界书</option>
         <option value="preset">预设缝合</option>
         <option value="regex">正则</option>
+        <option value="set">设置</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
       <div class="rs_ball_toggle" title="显示或隐藏悬浮球"><span>悬浮球</span><i></i></div>
@@ -1853,7 +1852,7 @@ function ensureShell() {
         </div>
         <div class="rs_pz_filter">
           <input type="text" class="rs_pz_q" data-side="src" placeholder="搜索名称或内容">
-          <select class="rs_pz_cat text_pole" data-side="src"></select>
+          <div class="rs_icon rs_pz_foldall fa-solid fa-layer-group" data-side="src" title="全部展开/收起分类"></div>
           <div class="rs_icon rs_pz_all fa-solid fa-check-double" title="全选列表里的"></div>
         </div>
         <div class="rs_pz_list rs_pz_src_list"></div>
@@ -1861,7 +1860,7 @@ function ensureShell() {
       <div class="rs_grip"><span></span></div>
       <div class="rs_bar rs_pz_act">
         <span class="rs_pz_count"></span>
-        <select class="rs_pz_pos text_pole"></select>
+        <div class="rs_pz_pos">插到最后</div>
         <div class="menu_button rs_pz_insert">插入</div>
       </div>
       <div class="rs_pz_sec">
@@ -1873,12 +1872,18 @@ function ensureShell() {
         </div>
         <div class="rs_pz_filter">
           <input type="text" class="rs_pz_q" data-side="tgt" placeholder="搜索名称或内容">
-          <select class="rs_pz_cat text_pole" data-side="tgt"></select>
+          <div class="rs_icon rs_pz_foldall fa-solid fa-layer-group" data-side="tgt" title="全部展开/收起分类"></div>
         </div>
         <div class="rs_pz_list rs_pz_tgt_list" data-drop="pz"></div>
       </div>
       <div class="rs_pz_ed"></div>
+      <div class="rs_pz_pick">
+        <div class="rs_bar"><div class="rs_bar_title">插在哪条后面</div><div class="rs_icon rs_pz_pick_close fa-solid fa-xmark" title="关闭"></div></div>
+        <div class="rs_pz_filter"><input type="text" class="rs_pz_q" data-side="pick" placeholder="搜索条目"></div>
+        <div class="rs_pz_list rs_pz_pick_list"></div>
+      </div>
     </div>
+    <div class="rs_set"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
         <select class="rs_rx_scope text_pole"></select>
@@ -1898,6 +1903,7 @@ function ensureShell() {
   </div>
 </div>`);
     bodyEl().addEventListener('scroll', syncBackScroll, { passive: true });
+    applyLook();
     updateBallToggle();
     window.visualViewport?.addEventListener('resize', fitToViewport);
     window.visualViewport?.addEventListener('scroll', fitToViewport);
@@ -1937,7 +1943,14 @@ function showTarget(t) {
     clearSel();
     if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
     if (state.target?.kind === 'regex' && t.kind !== 'regex') rxReset();
-    $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex');
+    $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex').toggleClass('rs_mode_set', t.kind === 'set');
+    if (t.kind === 'set') {
+        state.target = t;
+        $('#rs_panel .rs_kind').val('set');
+        $('#rs_panel .rs_title').text(t.subtitle);
+        renderSettings();
+        return;
+    }
     if (t.kind === 'preset' || t.kind === 'regex') {
         state.target = t;
         $('#rs_panel .rs_kind').val(t.kind);
@@ -2371,7 +2384,7 @@ const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
-const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], ed: null };
+const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], ed: null, open: new Set(), unfold: new Set(), pos: 'end', picking: false, editing: null };
 
 const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
 const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -2687,61 +2700,269 @@ async function pzSetKind(kind) {
     pzRender();
 }
 
+const pzQuery = side => String($(`#rs_panel .rs_pz_q[data-side="${side}"]`).val() || '').trim().toLowerCase();
+const pzHit = (e, q) => !q || e.name.toLowerCase().includes(q) || e.content.toLowerCase().includes(q);
+
 function pzFilter(list, side) {
-    const q = String($(`#rs_panel .rs_pz_q[data-side="${side}"]`).val() || '').trim().toLowerCase();
-    const c = $(`#rs_panel .rs_pz_cat[data-side="${side}"]`).val() || '';
-    return list.filter(e => (!c || e.cat === c) && (!q || e.name.toLowerCase().includes(q) || e.content.toLowerCase().includes(q)));
+    const q = pzQuery(side);
+    return list.filter(e => pzHit(e, q));
 }
 
-function pzFillCats(list, side) {
-    const $s = $(`#rs_panel .rs_pz_cat[data-side="${side}"]`);
-    const cur = $s.val();
-    const cats = [...new Set(list.filter(e => e.div).map(e => e.cat))];
-    $s.toggle(cats.length > 0).html('<option value="">全部分类</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join(''));
-    $s.val(cats.includes(cur) ? cur : '');
+function pzVisible(list, side, foldKey) {
+    const q = pzQuery(side);
+    if (q) return list.filter(e => pzHit(e, q)).map(e => ({ e, flat: true }));
+    const out = [];
+    let head = null;
+    list.forEach(e => {
+        if (e.div) {
+            head = { e, n: 0, open: pz.unfold.has(foldKey + e.key) };
+            out.push(head);
+        } else {
+            if (head) head.n++;
+            if (!head || head.open) out.push({ e });
+        }
+    });
+    return out;
 }
 
-function pzRowHtml(e, side, other) {
+function pzRowHtml(e, side, other, x = {}) {
     const st = other ? (pzSame(other, e) ? 'same' : 'diff') : side === 'src' ? 'new' : '';
     const sel = side === 'src' && pz.sel.has(e.key);
     const tag = st ? `<span class="rs_pz_tag rs_pz_${st}">${{ new: '新', diff: '不同', same: '相同' }[st]}</span>` : '';
-    const cat = e.div || !e.cat ? '' : `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>`;
+    const cat = x.flat && e.cat && !e.div ? `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>` : '';
+    const count = e.div && !x.flat ? `<span class="rs_pz_cnt">${x.n}</span>` : '';
+    const fold = e.div && !x.flat ? `<span class="rs_pz_fold fa-solid ${x.open ? 'fa-chevron-down' : 'fa-chevron-right'}"></span>` : '';
     const pv = e.marker ? '系统占位，没有内容' : e.content.replace(/\s+/g, ' ').trim().slice(0, PZ_PREVIEW);
-    const lead = side === 'src' ? '<span class="rs_cb"></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
-    const tail = side === 'src'
-        ? '<span class="rs_icon rs_pz_edit fa-solid fa-pen" title="编辑"></span>'
-        : `${e.inOrder ? '<span class="rs_pz_here" title="插到这条后面">插到这后</span>' : ''}<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
+    const lead = side === 'src' ? '<span class="rs_cb_hit"><span class="rs_cb"></span></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
+    const divEdit = e.div && !x.flat ? '<span class="rs_icon rs_pz_divedit fa-solid fa-pen" title="查看/编辑这条"></span>' : '';
+    const tail = side === 'src' ? divEdit : `${divEdit}${e.inOrder ? '<span class="rs_pz_here" title="插到这条后面">插到这后</span>' : ''}<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
     const cls = ['rs_pz_row', e.div && 'rs_pz_div', sel && 'rs_pz_sel', side === 'tgt' && !e.enabled && 'rs_pz_off'].filter(Boolean).join(' ');
-    return `<div class="${cls}" data-k="${escapeHtml(e.key)}">${lead}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${tag}${cat}</div>${pv ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
+    return `<div class="${cls}">${lead}${fold}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${count}${tag}${cat}</div>${pv && !pz.open.has(side + e.key) ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
+}
+
+function pzCardHtml(e, side, other) {
+    const roles = PZ_ROLES.map(([v, t]) => `<option value="${v}" ${e.role === v ? 'selected' : ''}>${t}</option>`).join('');
+    return `<div class="rs_pz_card">
+  <div class="rs_pz_card_row"><input type="text" class="rs_pz_cf" data-f="name" value="${escapeHtml(e.name)}" placeholder="条目名称"><select class="rs_pz_cf text_pole" data-f="role">${roles}</select></div>
+  <textarea class="rs_pz_cf rs_pz_ct" data-f="content" spellcheck="false" ${e.marker ? 'readonly placeholder="系统占位条目，内容由酒馆自动填入"' : ''}>${escapeHtml(e.content)}</textarea>
+  <div class="rs_pz_card_foot">
+    ${side === 'src' ? '<span class="rs_pz_card_note">这里改的只影响插入的内容</span>' : ''}
+    <div class="rs_bar_spacer"></div>
+    ${other ? '<span class="rs_pz_card_btn" data-a="diff">对比</span>' : ''}
+    <span class="rs_pz_card_btn" data-a="full">全屏</span>
+    ${side === 'tgt' && !e.marker ? '<span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除</span>' : ''}
+  </div>
+</div>`;
+}
+
+function pzItemHtml(v, side, maps) {
+    const e = v.e;
+    const other = maps ? pzFind(e, maps) : null;
+    const open = pz.open.has(side + e.key);
+    return `<div class="rs_pz_item${open ? ' rs_pz_open' : ''}" data-k="${escapeHtml(e.key)}">${pzRowHtml(e, side, other, v)}${open ? pzCardHtml(e, side, other) : ''}</div>`;
+}
+
+function pzFitCards() {
+    $('#rs_panel .rs_pz_ct').each(function () { pzFit(this); });
+}
+
+function pzFit(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.45)) + 'px';
+}
+
+function pzRenderList(side) {
+    const src = pz.src?.entries || [];
+    const list = side === 'src' ? src : pz.tl;
+    const maps = side === 'src' ? pzMaps(pz.tl) : pz.src ? pzMaps(src) : null;
+    const rows = pzVisible(list, side, side);
+    const empty = side === 'src'
+        ? (src.length ? '没有符合的条目' : '这里没有条目。可以点右上角的文件图标导入 txt、Word 或 json。')
+        : (pz.tl.length ? '没有符合的条目' : '这个预设还没有条目');
+    $(`#rs_panel .rs_pz_${side}_list`).html(rows.length ? rows.map(v => pzItemHtml(v, side, maps)).join('') : `<div class="rs_empty">${empty}</div>`);
+    $(`#rs_panel .rs_pz_foldall[data-side="${side}"]`).toggle(list.some(e => e.div));
+}
+
+function pzPosLabel() {
+    if (pz.pos === 'start') return '插到最前';
+    const e = pz.pos !== 'end' && pz.tl.find(x => x.id === pz.pos && x.inOrder);
+    if (!e) pz.pos = 'end';
+    return e ? `插在「${e.name || '（无名）'}」后` : '插到最后';
 }
 
 function pzRender() {
+    pz.editing = null;
     pz.tl = pz.tgt ? pzFromPreset(pz.tgt.preset) : [];
-    const src = pz.src?.entries || [];
-    const tMaps = pzMaps(pz.tl);
-    const sMaps = pzMaps(src);
-
-    pzFillCats(src, 'src');
-    const sRows = pzFilter(src, 'src');
-    $('#rs_panel .rs_pz_src_list').html(sRows.length
-        ? sRows.map(e => pzRowHtml(e, 'src', pzFind(e, tMaps))).join('')
-        : `<div class="rs_empty">${src.length ? '没有符合的条目' : '这里没有条目。可以点右上角的文件图标导入 txt、Word 或 json。'}</div>`);
-
-    pzFillCats(pz.tl, 'tgt');
-    const tRows = pzFilter(pz.tl, 'tgt');
-    $('#rs_panel .rs_pz_tgt_list').html(tRows.length
-        ? tRows.map(e => pzRowHtml(e, 'tgt', pz.src ? pzFind(e, sMaps) : null)).join('')
-        : `<div class="rs_empty">${pz.tl.length ? '没有符合的条目' : '这个预设还没有条目'}</div>`);
+    pzRenderList('src');
+    pzRenderList('tgt');
+    pzFitCards();
     $('#rs_panel .rs_pz_undo').toggleClass('rs_off', !pz.tgt?.undo.length);
     $('#rs_panel .rs_pz_save').toggleClass('rs_off', !pz.tgt?.dirty).text(pz.tgt?.dirty ? '保存' : '已保存');
-
-    const $pos = $('#rs_panel .rs_pz_pos');
-    const keep = $pos.val();
-    const cats = [...new Set(pz.tl.filter(e => e.div && e.inOrder).map(e => e.cat))];
-    $pos.html('<option value="end">插到最后</option><option value="start">插到最前</option>'
-        + (cats.length ? `<optgroup label="插到这一类的末尾">${cats.map(c => `<option value="c:${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</optgroup>` : ''));
-    $pos.val(keep && $pos.find(`option[value="${CSS.escape(keep)}"]`).length ? keep : 'end');
+    $('#rs_panel .rs_pz_pos').text(pzPosLabel());
+    if (pz.picking) pzRenderPick();
     pzRenderAct();
+}
+
+function pzRenderPick() {
+    const list = pz.tl.filter(e => e.inOrder);
+    const rows = pzVisible(list, 'pick', 'pick');
+    const row = v => {
+        const e = v.e;
+        const fold = e.div && !v.flat ? `<span class="rs_pz_fold fa-solid ${v.open ? 'fa-chevron-down' : 'fa-chevron-right'}"></span>` : '';
+        const cat = v.flat && e.cat && !e.div ? `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>` : '';
+        const count = e.div && !v.flat ? `<span class="rs_pz_cnt">${v.n}</span>` : '';
+        return `<div class="rs_pz_item" data-k="${escapeHtml(e.key)}"><div class="rs_pz_row${e.div ? ' rs_pz_div' : ''}${pz.pos === e.id ? ' rs_pz_sel' : ''}">${fold}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${count}${cat}</div></div><span class="rs_pz_here rs_pz_pickit">插在这后</span></div></div>`;
+    };
+    $('#rs_panel .rs_pz_pick_list').html(
+        `<div class="rs_pz_item" data-k="@start"><div class="rs_pz_row${pz.pos === 'start' ? ' rs_pz_sel' : ''}"><div class="rs_pz_main"><div class="rs_pz_name">插到最前</div></div><span class="rs_pz_here rs_pz_pickit">选这里</span></div></div>`
+        + `<div class="rs_pz_item" data-k="@end"><div class="rs_pz_row${pz.pos === 'end' ? ' rs_pz_sel' : ''}"><div class="rs_pz_main"><div class="rs_pz_name">插到最后</div></div><span class="rs_pz_here rs_pz_pickit">选这里</span></div></div>`
+        + rows.map(row).join(''));
+}
+
+function pzOpenPick(on) {
+    pz.picking = on;
+    $('#rs_panel .rs_pz').toggleClass('rs_pz_picking_pos', on);
+    if (!on) return;
+    $('#rs_panel .rs_pz_q[data-side="pick"]').val('');
+    pzRenderPick();
+}
+
+function pzPickTap(item, onFold) {
+    const k = item.dataset.k;
+    if (k === '@start' || k === '@end') pz.pos = k.slice(1);
+    else {
+        const e = pz.tl.find(x => x.key === k);
+        if (!e) return;
+        if (e.div && onFold && !pzQuery('pick')) {
+            pzToggleFold('pick', k);
+            return pzRenderPick();
+        }
+        pz.pos = e.id;
+    }
+    pzOpenPick(false);
+    $('#rs_panel .rs_pz_pos').text(pzPosLabel());
+}
+
+function pzToggleFold(side, key) {
+    const k = side + key;
+    if (pz.unfold.has(k)) pz.unfold.delete(k);
+    else pz.unfold.add(k);
+}
+
+function pzFoldAll(side) {
+    const list = side === 'src' ? pz.src?.entries || [] : pz.tl;
+    const heads = list.filter(e => e.div).map(e => side + e.key);
+    const anyOpen = heads.some(k => pz.unfold.has(k));
+    heads.forEach(k => anyOpen ? pz.unfold.delete(k) : pz.unfold.add(k));
+    pzRenderList(side);
+    pzFitCards();
+}
+
+function pzSideOf(el) {
+    return el.closest('.rs_pz_src_list') ? 'src' : 'tgt';
+}
+
+function pzEntryOf(side, key) {
+    return side === 'src' ? pz.src?.entries.find(x => x.key === key) : pz.tl.find(x => x.key === key);
+}
+
+function pzTapItem(item, target) {
+    const side = pzSideOf(item);
+    const key = item.dataset.k;
+    const $t = $(target);
+    if ($t.closest('.rs_pz_card').length) return;
+    if ($t.closest('.rs_drag').length) return;
+    if (side === 'src' && $t.closest('.rs_cb_hit').length) {
+        pzToggleSel(key);
+        return pzRenderAct();
+    }
+    if (side === 'tgt' && $t.closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
+    if (side === 'tgt' && $t.closest('.rs_pz_here').length) return pzInsert(pz.tl.find(x => x.key === key)?.id);
+    const e = pzEntryOf(side, key);
+    if (!e) return;
+    if (e.div && !pzQuery(side) && !$t.closest('.rs_pz_divedit').length) {
+        pzToggleFold(side, key);
+        pzRenderList(side);
+        return pzFitCards();
+    }
+    const ok = side + key;
+    if (pz.open.has(ok)) pz.open.delete(ok);
+    else pz.open.add(ok);
+    pzRefreshItem(side, key);
+}
+
+function pzRefreshItem(side, key) {
+    const e = pzEntryOf(side, key);
+    const $item = $(`#rs_panel .rs_pz_${side}_list > .rs_pz_item[data-k="${CSS.escape(key)}"]`);
+    if (!e || !$item.length) return;
+    const src = pz.src?.entries || [];
+    const maps = side === 'src' ? pzMaps(pz.tl) : pz.src ? pzMaps(src) : null;
+    const v = { e };
+    if (e.div && !pzQuery(side)) {
+        const list = side === 'src' ? src : pz.tl;
+        const i = list.indexOf(e);
+        let n = 0;
+        for (let j = i + 1; j < list.length && !list[j].div; j++) n++;
+        Object.assign(v, { n, open: pz.unfold.has(side + key) });
+    } else if (pzQuery(side)) v.flat = true;
+    const $new = $(pzItemHtml(v, side, maps));
+    $item.replaceWith($new);
+    $new.find('.rs_pz_ct').each(function () { pzFit(this); });
+}
+
+function pzCardInput(el) {
+    const item = el.closest('.rs_pz_item');
+    const side = pzSideOf(item);
+    const key = item.dataset.k;
+    const f = el.dataset.f;
+    if (f === 'content') pzFit(el);
+    const e = pzEntryOf(side, key);
+    if (!e || (f === 'content' && e.marker)) return;
+    if (side === 'src') {
+        e[f] = el.value;
+        return;
+    }
+    const p = pzPrompt(e.id);
+    if (!p) return;
+    if (pz.editing !== key) {
+        pzPush();
+        pz.editing = key;
+    }
+    p[f] = el.value;
+    e[f] = el.value;
+    pz.tgt.dirty = true;
+    $('#rs_panel .rs_pz_undo').removeClass('rs_off');
+    $('#rs_panel .rs_pz_save').removeClass('rs_off').text('保存');
+}
+
+function pzCardDone(el) {
+    const item = el.closest('.rs_pz_item');
+    if (!item) return;
+    pz.editing = null;
+    const side = pzSideOf(item);
+    const e = pzEntryOf(side, item.dataset.k);
+    if (!e) return;
+    const $row = $(item).children('.rs_pz_row');
+    $row.find('.rs_pz_nm').text(e.name || '（无名）');
+    pzRenderAct();
+}
+
+async function pzCardAct(btn) {
+    const item = btn.closest('.rs_pz_item');
+    const side = pzSideOf(item);
+    const key = item.dataset.k;
+    const a = btn.dataset.a;
+    if (a === 'del') {
+        const e = pz.tl.find(x => x.key === key);
+        if (!e || !(await askConfirm(`从「${pz.tgt.name}」里删掉「${e.name}」？保存前可以撤回`))) return;
+        pzPush();
+        pz.tgt.preset.prompts = pz.tgt.preset.prompts.filter(x => x.identifier !== e.id);
+        pz.tgt.preset.prompt_order.forEach(o => { if (Array.isArray(o.order)) o.order = o.order.filter(x => x.identifier !== e.id); });
+        pz.open.delete(side + key);
+        return pzChanged();
+    }
+    pzOpenEd(side, key);
+    if (a === 'diff') pzEdTab('diff');
 }
 
 function pzRenderAct() {
@@ -2756,6 +2977,7 @@ function pzRenderAct() {
     });
     $('#rs_panel .rs_pz_count').text(picks.length ? `已选 ${picks.length}` : '未选择');
     $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_picking', add + rep > 0);
+    $('#rs_panel .rs_pz_pos').toggleClass('rs_off', !(add + rep));
     $('#rs_panel .rs_pz_insert')
         .text(add || rep ? [add && `插入 ${add}`, rep && `替换 ${rep}`].filter(Boolean).join(' · ') : '插入')
         .toggleClass('rs_off', !(add || rep));
@@ -2765,7 +2987,7 @@ function pzToggleSel(key, on) {
     if (on ?? !pz.sel.has(key)) pz.sel.add(key);
     else pz.sel.delete(key);
     const sel = pz.sel.has(key);
-    $(`#rs_panel .rs_pz_src_list .rs_pz_row[data-k="${CSS.escape(key)}"]`).toggleClass('rs_pz_sel', sel);
+    $(`#rs_panel .rs_pz_src_list > .rs_pz_item[data-k="${CSS.escape(key)}"] > .rs_pz_row`).toggleClass('rs_pz_sel', sel);
 }
 
 function pzSelectAll() {
@@ -2802,11 +3024,7 @@ function pzInsert(here) {
     const prompts = t.preset.prompts;
     const order = pzOrder(t.preset).order;
     const maps = pzMaps(pz.tl);
-    let pos = here || $('#rs_panel .rs_pz_pos').val() || 'end';
-    if (pos.startsWith('c:')) {
-        const inCat = pz.tl.filter(e => e.inOrder && e.cat === pos.slice(2));
-        pos = inCat.length ? inCat[inCat.length - 1].id : 'end';
-    }
+    const pos = here || pz.pos || 'end';
     const idx = order.findIndex(o => o.identifier === pos);
     let at = pos === 'start' ? 0 : idx >= 0 ? idx + 1 : order.length;
     let add = 0;
@@ -3099,6 +3317,9 @@ function pzReset() {
     if (!pz.src?.v.startsWith('f:')) pz.src = null;
     pz.sel.clear();
     pz.ed = null;
+    pz.open.clear();
+    pz.picking = false;
+    pz.pos = 'end';
 }
 
 async function openStitch() {
@@ -3544,6 +3765,7 @@ const LOADERS = {
         return { kind: 'preset', subtitle: '对话补全预设', initial: '' };
     },
     regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
+    set: async () => ({ kind: 'set', subtitle: '插件设置', initial: '' }),
 };
 
 async function openFromBall() {
@@ -3572,21 +3794,21 @@ function bindPanelEvents() {
             this.value = '';
             if (f) pzLoadFile(f);
         })
-        .on('input change', '#rs_panel .rs_pz_q, #rs_panel .rs_pz_cat', pzRender)
+        .on('input', '#rs_panel .rs_pz_q', function () {
+            const side = this.dataset.side;
+            if (side === 'pick') return pzRenderPick();
+            pzRenderList(side);
+            pzFitCards();
+        })
         .on('click', '#rs_panel .rs_pz_all', pzSelectAll)
-        .on('click', '#rs_panel .rs_pz_src_list .rs_pz_row', function (e) {
-            const key = this.dataset.k;
-            if ($(e.target).closest('.rs_pz_edit').length) return pzOpenEd('src', key);
-            pzToggleSel(key);
-            pzRenderAct();
-        })
-        .on('click', '#rs_panel .rs_pz_tgt_list .rs_pz_row', function (e) {
-            const key = this.dataset.k;
-            if ($(e.target).closest('.rs_drag').length) return;
-            if ($(e.target).closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
-            if ($(e.target).closest('.rs_pz_here').length) return pzInsert(pz.tl.find(x => x.key === key)?.id);
-            pzOpenEd('tgt', key);
-        })
+        .on('click', '#rs_panel .rs_pz_foldall', function () { pzFoldAll(this.dataset.side); })
+        .on('click', '#rs_panel .rs_pz_src_list > .rs_pz_item, #rs_panel .rs_pz_tgt_list > .rs_pz_item', function (e) { pzTapItem(this, e.target); })
+        .on('click', '#rs_panel .rs_pz_pick_list > .rs_pz_item', function (e) { pzPickTap(this, !$(e.target).closest('.rs_pz_pickit').length); })
+        .on('click', '#rs_panel .rs_pz_pos', () => pzOpenPick(true))
+        .on('click', '#rs_panel .rs_pz_pick_close', () => pzOpenPick(false))
+        .on('input', '#rs_panel .rs_pz_cf', function () { pzCardInput(this); })
+        .on('change', '#rs_panel .rs_pz_cf', function () { pzCardDone(this); })
+        .on('click', '#rs_panel .rs_pz_card_btn', function () { pzCardAct(this); })
         .on('click', '#rs_panel .rs_pz_insert', () => pzInsert())
         .on('change', '#rs_panel .rs_rx_scope', function () { rxChangeScope(this.value); })
         .on('change', '#rs_panel .rs_rx_file', function () {
@@ -3960,18 +4182,44 @@ function imageToDataUrl(file) {
     });
 }
 
+const LOOK_RANGE = { panelWidth: [320, 1400], panelHeight: [50, 100], editFont: [12, 24], dim: [0, 90] };
+
+function lookNum(k) {
+    const [lo, hi] = LOOK_RANGE[k];
+    return Math.min(hi, Math.max(lo, Number(settings()[k]) || DEFAULTS[k]));
+}
+
+function applyLook() {
+    const s = settings();
+    const ov = document.getElementById('rs_overlay');
+    const el = document.getElementById('rs_panel');
+    if (!ov || !el) return;
+    el.style.setProperty('--rs-w', lookNum('panelWidth') + 'px');
+    el.style.setProperty('--rs-h', lookNum('panelHeight') + 'dvh');
+    el.style.setProperty('--rs-font', lookNum('editFont') + 'px');
+    ['accent', 'panelBg', 'panelText'].forEach(k => {
+        const v = /^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : '';
+        el.style.setProperty({ accent: '--rs-accent', panelBg: '--rs-bg', panelText: '--rs-text' }[k], v || null);
+    });
+    ov.style.background = `rgba(0, 0, 0, ${(s.dim ?? DEFAULTS.dim) / 100})`;
+    applySplitRatio();
+}
+
 function renderSettings() {
     const s = settings();
-    $('#extensions_settings2').append(`
-<div class="regen-splice-settings">
-  <div class="inline-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header">
-      <b>重生成拼接</b>
-      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-    </div>
-    <div class="inline-drawer-content">
-      <label class="checkbox_label"><input type="checkbox" id="rs_enabled"> 重新生成时保留旧版本</label>
-      <label>每条消息最多保留版本数<input type="number" id="rs_max" class="text_pole" min="2"></label>
+    const color = (k, label) => `<div class="rs_set_color"><span>${label}</span><input type="color" data-look="${k}" value="${/^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : '#888888'}"><span class="rs_set_reset${s[k] ? '' : ' rs_on'}" data-reset="${k}">跟随主题</span></div>`;
+    const range = (k, label, unit) => `<label class="rs_set_range"><span>${label}</span><input type="range" data-look="${k}" min="${LOOK_RANGE[k][0]}" max="${LOOK_RANGE[k][1]}" value="${lookNum(k)}"><b>${lookNum(k)}${unit}</b></label>`;
+    $('#rs_panel .rs_set').html(`
+<div class="rs_set_body">
+      <div class="rs_set_h">外观</div>
+      ${range('panelWidth', '面板宽度', 'px')}
+      ${range('panelHeight', '面板高度', '%')}
+      ${range('editFont', '编辑区字号', 'px')}
+      ${range('dim', '背景变暗', '%')}
+      ${color('accent', '强调色')}
+      ${color('panelBg', '面板底色')}
+      ${color('panelText', '文字颜色')}
+      <div class="rs_set_h">悬浮球</div>
       <label class="checkbox_label"><input type="checkbox" id="rs_ball_on"> 显示悬浮球</label>
       <label>悬浮球大小（像素，30–300）<input type="number" id="rs_ball_size" class="text_pole" min="30" max="300"></label>
       <div>悬浮球图片</div>
@@ -3987,10 +4235,14 @@ function renderSettings() {
           <option value="original">原图形状</option>
         </select>
       </label>
-      <label class="checkbox_label"><input type="checkbox" id="rs_tap_on"> 双击聊天里的句子直接编辑</label>
+      <div class="rs_set_h">聊天</div>
+      <label class="checkbox_label"><input type="checkbox" id="rs_enabled"> 重新生成时保留旧版本</label>
+      <label>每条消息最多保留版本数<input type="number" id="rs_max" class="text_pole" min="2"></label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_tap_on"> 双击聊天里的段落直接编辑</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_selguard_on"> 聊天里选字只选在同一楼（防止乱跳、选太多）</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_vchip_on"> 有多个版本的楼层显示版本切换</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_bchip_on"> 有分支的楼层显示分支切换</label>
+      <div class="rs_set_h">编辑</div>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_whole"> 八股词整句标出</label>
       <label>八股词表（一行一个；中间隔字用 ……，比如 不是……而是；用 /.../ 包起来是正则）
@@ -3998,10 +4250,22 @@ function renderSettings() {
       </label>
       <label>正文标签（“只编辑正文”时只留这个标签里的内容，比如 content）<input type="text" id="rs_body_tag" class="text_pole"></label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
-    </div>
-  </div>
 </div>`);
 
+    $('#rs_panel .rs_set input[data-look]').on('input', function () {
+        const k = this.dataset.look;
+        settings()[k] = this.type === 'color' ? this.value : Number(this.value);
+        if (this.type === 'range') $(this).next('b').text(this.value + (k === 'panelWidth' || k === 'editFont' ? 'px' : '%'));
+        else $(this).nextAll('.rs_set_reset').removeClass('rs_on');
+        applyLook();
+        ctx().saveSettingsDebounced();
+    });
+    $('#rs_panel .rs_set .rs_set_reset').on('click', function () {
+        settings()[this.dataset.reset] = '';
+        $(this).addClass('rs_on');
+        applyLook();
+        ctx().saveSettingsDebounced();
+    });
     $('#rs_enabled').prop('checked', s.enabled).on('change', function () {
         settings().enabled = this.checked;
         ctx().saveSettingsDebounced();
@@ -4088,7 +4352,6 @@ jQuery(() => {
     const c = ctx();
     const ev = c.eventTypes || c.event_types;
 
-    renderSettings();
     injectButtons();
     bindPanelEvents();
     renderBall();
