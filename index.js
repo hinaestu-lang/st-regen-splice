@@ -2107,12 +2107,6 @@ function ensureShell() {
         <div class="rs_bar rs_pz_head">
           <span class="rs_pz_label">来源</span>
           <select class="rs_pz_src text_pole"></select>
-          <select class="rs_pz_split text_pole">
-            <option value="auto">自动分条</option>
-            <option value="head">按标题</option>
-            <option value="blank">按空行</option>
-            <option value="whole">整篇一条</option>
-          </select>
           <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入 txt / Word / json"><input type="file" class="rs_pz_file" accept=".txt,.md,.json,.docx,.doc,text/plain,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>
         </div>
         <div class="rs_pz_filter">
@@ -2804,66 +2798,9 @@ async function pzReadFile(file) {
     return { text };
 }
 
-function pzSplitText(text, mode, fallback) {
-    text = String(text).replace(/\r\n?/g, '\n');
-    const lines = text.split('\n');
-    const headOf = l => {
-        const m = l.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/) || l.match(/^\s*【([^】]{1,30})】\s*$/);
-        return m ? m[1].trim() : null;
-    };
-    const tagOf = l => l.match(/^\s*<([A-Za-z_一-龥][\w一-龥-]*)(?:\s[^>]*)?>/)?.[1] || null;
-    const closeRe = t => new RegExp(`</${escapeRe(t)}\\s*>`);
-    const hasHead = lines.some(headOf);
-    const hasXml = lines.some(l => {
-        const t = tagOf(l);
-        return t && closeRe(t).test(text);
-    });
-    if (mode === 'auto') mode = hasHead || hasXml ? 'head' : 'whole';
-    const nameOf = t => (t.split('\n').find(x => x.trim()) || '').trim().slice(0, 20) || fallback;
-    if (mode === 'whole') return text.trim() ? [{ name: fallback, content: text.trim() }] : [];
-    if (mode === 'blank') return text.split(/\n[ \t]*\n+/).map(t => t.trim()).filter(Boolean).map(t => ({ name: nameOf(t), content: t }));
-
-    const out = [];
-    let cur = null;
-    let closing = null;
-    const flush = () => {
-        if (cur) {
-            const c = cur.lines.join('\n').trim();
-            if (c || cur.name) out.push({ name: cur.name || nameOf(c), content: c });
-        }
-        cur = null;
-    };
-    let pos = 0;
-    lines.forEach(l => {
-        const next = pos + l.length + 1;
-        if (closing) {
-            cur.lines.push(l);
-            if (closing.test(l)) {
-                closing = null;
-                flush();
-            }
-        } else if (hasHead && headOf(l)) {
-            flush();
-            cur = { name: headOf(l), lines: [] };
-        } else if (!hasHead && tagOf(l) && closeRe(tagOf(l)).test(text.slice(pos))) {
-            const t = tagOf(l);
-            flush();
-            cur = { name: t, lines: [l] };
-            if (closeRe(t).test(l.slice(l.indexOf('>') + 1))) flush();
-            else closing = closeRe(t);
-        } else {
-            if (!cur) cur = { name: '', lines: [] };
-            cur.lines.push(l);
-        }
-        pos = next;
-    });
-    flush();
-    return out;
-}
-
 function pzBuildFileSource() {
     const f = pz.file;
-    const list = f.entries || pzSplitText(f.text, $('#rs_panel .rs_pz_split').val() || 'auto', f.name.replace(/\.[^.]+$/, ''));
+    const list = f.entries || (pzNorm(f.text) ? [{ name: f.name.replace(/\.[^.]+$/, ''), content: pzNorm(f.text) }] : []);
     pz.src = {
         v: 'file',
         entries: pzClassify(list.map((e, i) => (e.key ? e : { key: `f:${i}`, id: null, role: 'system', raw: null, enabled: true, ...e }))),
@@ -2874,12 +2811,11 @@ async function pzLoadFile(file) {
     try {
         const r = await pzReadFile(file);
         pz.file = { name: file.name, ...r };
-        $('#rs_panel .rs_pz_split').val('auto');
         pz.sel.clear();
         pzBuildFileSource();
         await pzFillSelects();
         pzRender();
-        toastr.success(`读到 ${pz.src.entries.length} 条`);
+        toastr.success(pz.file.text ? `读到「${file.name}」` : `读到 ${pz.src.entries.length} 条`);
     } catch (e) {
         toastr.error(e?.message || '读取文件失败');
     }
@@ -2976,7 +2912,6 @@ function pzRender() {
     $('#rs_panel .rs_pz_src_list').html(sRows.length
         ? sRows.map(e => pzRowHtml(e, 'src', pzFind(e, tMaps))).join('')
         : `<div class="rs_empty">${src.length ? '没有符合的条目' : '这里没有条目。可以点右上角的文件图标导入 txt、Word 或 json。'}</div>`);
-    $('#rs_panel .rs_pz_split').toggle(pz.src?.v === 'file' && !!pz.file?.text);
 
     pzFillCats(pz.tl, 'tgt');
     const tRows = pzFilter(pz.tl, 'tgt');
@@ -3389,12 +3324,6 @@ function bindPanelEvents() {
     $(document)
         .on('change', '#rs_panel .rs_pz_src', async function () {
             await pzSetSource(this.value);
-            pzRender();
-        })
-        .on('change', '#rs_panel .rs_pz_split', () => {
-            if (!pz.file?.text) return;
-            pz.sel.clear();
-            pzBuildFileSource();
             pzRender();
         })
         .on('change', '#rs_panel .rs_pz_file', function () {

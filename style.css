@@ -1110,12 +1110,6 @@
     font-size: 14px;
 }
 
-#rs_panel .rs_pz_head .rs_pz_split {
-    flex: none;
-    width: auto;
-    max-width: 32%;
-}
-
 #rs_panel .rs_pz_import {
     flex: none;
     margin: 0;
