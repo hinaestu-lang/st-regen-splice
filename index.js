@@ -4362,6 +4362,83 @@ function applyLook() {
     applySplitRatio();
 }
 
+const CC_PREVIEW = 40;
+const cc = { list: [], sel: new Set(), badOnly: true };
+
+async function ccLoad() {
+    const c = ctx();
+    $('#rs_panel .rs_cc').html('<div class="rs_empty">正在读取……</div>');
+    let data = [];
+    try {
+        const res = await fetch('/api/chats/recent', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ max: 100000 }) });
+        if (!res.ok) throw new Error(String(res.status));
+        data = await res.json();
+    } catch (e) {
+        console.error('[重生成拼接] 读取聊天文件失败', e);
+        $('#rs_panel .rs_cc').html('<div class="rs_empty">读不到聊天文件</div>');
+        return;
+    }
+    cc.list = (Array.isArray(data) ? data : []).map(x => {
+        const ch = x.avatar && c.characters.find(y => y.avatar === x.avatar);
+        const gr = x.group && (c.groups || []).find(g => g.id === x.group);
+        const empty = !x.chat_items || /^\[The (chat|message) is empty\]$/.test(String(x.mes));
+        return {
+            ...x,
+            key: `${x.group ? 'g:' + x.group : 'c:' + x.avatar}/${x.file_name}`,
+            owner: ch?.name || gr?.name || String(x.avatar || x.group || '').replace(/\.png$/, ''),
+            missing: !ch && !gr,
+            bad: empty || (!ch && !gr),
+        };
+    }).sort((a, b) => b.bad - a.bad || a.owner.localeCompare(b.owner, 'zh'));
+    cc.sel.clear();
+    ccRender();
+}
+
+function ccRender() {
+    const bad = cc.list.filter(x => x.bad).length;
+    const rows = cc.badOnly ? cc.list.filter(x => x.bad) : cc.list;
+    const row = x => {
+        const tags = [x.missing && '角色不存在', !x.missing && x.bad && '可能损坏'].filter(Boolean).map(t => `<span class="rs_pz_tag rs_pz_diff">${t}</span>`).join('');
+        const pv = `${x.chat_items || 0} 条 · ${x.file_size || ''} · ${String(x.mes || '').replace(/\s+/g, ' ').slice(0, CC_PREVIEW)}`;
+        return `<div class="rs_pz_row${cc.sel.has(x.key) ? ' rs_pz_sel' : ''}" data-k="${escapeHtml(x.key)}"><span class="rs_cb_hit"><span class="rs_cb"></span></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(x.file_name.replace(/\.jsonl$/, ''))}</span>${tags}<span class="rs_pz_cat_tag">${escapeHtml(x.owner)}</span></div><div class="rs_pz_pv">${escapeHtml(pv)}</div></div></div>`;
+    };
+    $('#rs_panel .rs_cc').html(`
+<div class="rs_cc_bar">
+  <span>共 ${cc.list.length} 个，可能有问题 ${bad} 个</span>
+  <span class="rs_chip rs_cc_bad${cc.badOnly ? ' rs_on' : ''}">只看有问题的</span>
+</div>
+<div class="rs_cc_list">${rows.map(row).join('') || '<div class="rs_empty">没有找到有问题的聊天文件</div>'}</div>
+<div class="rs_cc_bar">
+  <span class="rs_chip rs_cc_all">全选</span>
+  <div class="menu_button rs_cc_del${cc.sel.size ? '' : ' rs_off'}">删除选中（${cc.sel.size}）</div>
+</div>`);
+}
+
+async function ccDelete() {
+    const c = ctx();
+    const cur = c.getCurrentChatId?.();
+    const picks = cc.list.filter(x => cc.sel.has(x.key));
+    const skip = picks.filter(x => x.file_id === cur);
+    const go = picks.filter(x => x.file_id !== cur);
+    if (skip.length) toastr.warning('正在打开的聊天不会删，先切到别的聊天');
+    if (!go.length || !(await askConfirm(`删掉选中的 ${go.length} 个聊天文件？删了就找不回来`))) return;
+    let ok = 0;
+    for (const x of go) {
+        const body = x.group ? { id: x.file_id } : { chatfile: x.file_name, avatar_url: x.avatar };
+        try {
+            const res = await fetch(x.group ? '/api/chats/group/delete' : '/api/chats/delete', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify(body) });
+            if (res.ok) ok++;
+        } catch (e) {
+            console.error('[重生成拼接] 删除聊天文件失败', x.file_name, e);
+        }
+    }
+    toastr[ok === go.length ? 'success' : 'warning'](`删掉了 ${ok} 个${ok < go.length ? `，${go.length - ok} 个没删成` : ''}`);
+    await ccLoad();
+    if (!c.getCurrentChatId?.()) {
+        try { await (await import('/scripts/welcome-screen.js')).openWelcomeScreen?.({ force: true }); } catch { }
+    }
+}
+
 function renderSettings() {
     const s = settings();
     const color = (k, label) => `<div class="rs_set_color"><span>${label}</span><input type="color" data-look="${k}" value="${/^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : '#888888'}"><span class="rs_set_reset${s[k] ? '' : ' rs_on'}" data-reset="${k}">跟随主题</span></div>`;
@@ -4407,6 +4484,10 @@ function renderSettings() {
       </label>
       <label>正文标签（“只编辑正文”时只留这个标签里的内容，比如 content）<input type="text" id="rs_body_tag" class="text_pole"></label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
+      <div class="rs_set_h">聊天文件</div>
+      <div class="rs_set_note">迁移后坏掉、只在欢迎页显示的聊天，可以在这里找出来删掉</div>
+      <div class="menu_button rs_cc_load">检查聊天文件</div>
+      <div class="rs_cc"></div>
 </div>`);
 
     $('#rs_panel .rs_set input[data-look]').on('input', function () {
@@ -4499,6 +4580,21 @@ function renderSettings() {
         settings().readerBody = this.value.trim();
         ctx().saveSettingsDebounced();
     });
+    $('#rs_panel .rs_cc_load').on('click', ccLoad);
+    $('#rs_panel .rs_cc').on('click', '.rs_pz_row', function () {
+        const k = this.dataset.k;
+        if (cc.sel.has(k)) cc.sel.delete(k);
+        else cc.sel.add(k);
+        ccRender();
+    }).on('click', '.rs_cc_bad', () => {
+        cc.badOnly = !cc.badOnly;
+        ccRender();
+    }).on('click', '.rs_cc_all', () => {
+        const rows = cc.badOnly ? cc.list.filter(x => x.bad) : cc.list;
+        const all = rows.length && rows.every(x => cc.sel.has(x.key));
+        rows.forEach(x => (all ? cc.sel.delete(x.key) : cc.sel.add(x.key)));
+        ccRender();
+    }).on('click', '.rs_cc_del', ccDelete);
     $('#rs_snap_keep').val(s.snapKeep).on('input', function () {
         settings().snapKeep = Math.max(2, parseInt(this.value) || DEFAULTS.snapKeep);
         ctx().saveSettingsDebounced();

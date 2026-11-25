@@ -1689,3 +1689,46 @@
 #rs_panel .rs_rx_pick_list [data-v^="c:"] .rs_pz_row {
     padding-left: 34px;
 }
+
+#rs_panel .rs_set_note {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+#rs_panel .rs_cc_load {
+    align-self: flex-start;
+    margin: 0;
+}
+
+#rs_panel .rs_cc_bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+}
+
+#rs_panel .rs_cc_bar .menu_button {
+    margin: 0;
+    padding: 5px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    color: #d9534f;
+}
+
+#rs_panel .rs_cc_bar .rs_off {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+#rs_panel .rs_cc_list {
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--rs-line);
+    border-radius: 10px;
+}
+
+#rs_panel .rs_cc .rs_pz_row {
+    border-bottom: 1px solid var(--rs-line);
+}
