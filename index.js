@@ -917,14 +917,18 @@ async function savedTarget(key, initial, rest) {
     return { refs: await buildRefs(key, initial), key, ref: 0, initial, saveLabel: '保存', closeAfterSave: false, ...rest };
 }
 
-function nameOpts(list, cur, curMark) {
+function nameLabels(list, curMark) {
     const count = new Map();
     list.forEach(x => count.set(x.name, (count.get(x.name) || 0) + 1));
-    return list.map(x => {
-        const dup = count.get(x.name) > 1 ? `（${escapeHtml(String(x.id).replace(/^c:/, '').replace(/\.[^.]+$/, ''))}）` : '';
-        const mark = x.id === curMark ? ' · 当前' : '';
-        return `<option value="${escapeHtml(x.id)}" ${x.id === cur ? 'selected' : ''}>${escapeHtml(x.name)}${dup}${mark}</option>`;
-    }).join('');
+    return new Map(list.map(x => {
+        const dup = count.get(x.name) > 1 ? `（${String(x.id).replace(/^c:/, '').replace(/\.[^.]+$/, '')}）` : '';
+        return [x.id, x.name + dup + (x.id === curMark ? ' · 当前' : '')];
+    }));
+}
+
+function nameOpts(list, cur, curMark) {
+    const labels = nameLabels(list, curMark);
+    return list.map(x => `<option value="${escapeHtml(x.id)}" ${x.id === cur ? 'selected' : ''}>${escapeHtml(labels.get(x.id))}</option>`).join('');
 }
 
 const charList = () => (ctx().characters || []).filter(c => c?.avatar).map(c => ({ id: c.avatar, name: String(c.name ?? c.avatar) }))
@@ -1899,7 +1903,7 @@ function ensureShell() {
     <div class="rs_set"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
-        <select class="rs_rx_scope text_pole"></select>
+        <div class="rs_pickbtn rs_rx_scope"></div>
         <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入正则 json"><input type="file" class="rs_rx_file" accept=".json,application/json" multiple hidden></label>
         <div class="rs_icon rs_rx_add fa-solid fa-plus" title="新建"></div>
         <div class="rs_icon rs_rx_undo fa-solid fa-rotate-left" title="撤回"></div>
@@ -1909,12 +1913,17 @@ function ensureShell() {
       <div class="rs_pz_filter"><input type="text" class="rs_rx_q" placeholder="搜索名称或表达式"><div class="rs_icon rs_rx_all fa-solid fa-check-double" title="全选列表里的"></div></div>
       <div class="rs_bar rs_pz_act rs_rx_act">
         <span class="rs_pz_count rs_rx_count"></span>
-        <select class="rs_rx_bmove text_pole"></select>
+        <div class="rs_pickbtn rs_rx_bmove">移到…</div>
         <div class="menu_button rs_rx_bdel">删除</div>
         <div class="rs_icon rs_rx_bclear fa-solid fa-xmark" title="取消选择"></div>
       </div>
       <div class="rs_pz_list rs_rx_list" data-drop="rx"></div>
       <div class="rs_rx_ed"></div>
+      <div class="rs_rx_pick">
+        <div class="rs_bar"><div class="rs_bar_title rs_rx_pick_title"></div><div class="rs_icon rs_rx_pick_close fa-solid fa-xmark" title="关闭"></div></div>
+        <div class="rs_pz_filter"><input type="text" class="rs_rx_pick_q" placeholder="搜索预设或角色"></div>
+        <div class="rs_pz_list rs_rx_pick_list"></div>
+      </div>
     </div>
     <div class="rs_body_wrap">
       <div class="rs_body_back" aria-hidden="true"></div>
@@ -3353,7 +3362,7 @@ const RX_FLAGS = [['markdownOnly', '只改显示'], ['promptOnly', '只改发送
 const RX_MACRO = [[0, '不替换宏'], [1, '宏原样替换'], [2, '宏转义后替换']];
 const RX_UNDO = 50;
 
-const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set() };
+const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set(), pick: null, unfold: new Set() };
 
 function rxBlank() {
     return {
@@ -3388,12 +3397,53 @@ async function rxScopes() {
     };
 }
 
-async function rxScopeOpts(sel, skip) {
-    const o = await rxScopes();
-    const f = l => l.filter(x => x.id !== skip);
-    return (skip === 'g' ? '' : `<option value="g" ${sel === 'g' ? 'selected' : ''}>全局正则</option>`)
-        + (f(o.presets).length ? `<optgroup label="预设正则">${nameOpts(f(o.presets), sel, o.curP)}</optgroup>` : '')
-        + (f(o.chars).length ? `<optgroup label="角色正则">${nameOpts(f(o.chars), sel, o.curC)}</optgroup>` : '');
+async function rxOpenPick(mode) {
+    rx.pick = { mode, o: await rxScopes() };
+    $('#rs_panel .rs_rx_pick_q').val('');
+    $('#rs_panel .rs_rx_pick_title').text(mode === 'scope' ? '查看哪里的正则' : '移到哪里');
+    $('#rs_panel .rs_rx').addClass('rs_rx_picking');
+    rxRenderPick();
+}
+
+function rxClosePick() {
+    rx.pick = null;
+    $('#rs_panel .rs_rx').removeClass('rs_rx_picking');
+}
+
+function rxRenderPick() {
+    const pk = rx.pick;
+    if (!pk) return;
+    const q = String($('#rs_panel .rs_rx_pick_q').val() || '').trim().toLowerCase();
+    const skip = pk.mode === 'scope' ? null : rx.scope;
+    const row = (v, label) => `<div class="rs_pz_item" data-v="${escapeHtml(v)}"><div class="rs_pz_row${v === rx.scope ? ' rs_pz_sel' : ''}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(label)}</span></div></div></div></div>`;
+    const group = (g, title, list, curMark) => {
+        const items = list.filter(x => x.id !== skip);
+        const labels = nameLabels(items, curMark);
+        const hits = items.filter(x => !q || labels.get(x.id).toLowerCase().includes(q));
+        if (!hits.length) return '';
+        const open = q || rx.unfold.has(g);
+        return `<div class="rs_pz_item" data-g="${g}"><div class="rs_pz_row rs_pz_div"><span class="rs_pz_fold fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}"></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${title}</span><span class="rs_pz_cnt">${hits.length}</span></div></div></div></div>`
+            + (open ? hits.map(x => row(x.id, labels.get(x.id))).join('') : '');
+    };
+    $('#rs_panel .rs_rx_pick_list').html(
+        (skip !== 'g' && (!q || '全局正则'.includes(q)) ? row('g', '全局正则') : '')
+        + group('p', '预设正则', pk.o.presets, pk.o.curP)
+        + group('c', '角色正则', pk.o.chars, pk.o.curC));
+}
+
+function rxPickTap(item) {
+    const g = item.dataset.g;
+    if (g) {
+        if (rx.unfold.has(g)) rx.unfold.delete(g);
+        else rx.unfold.add(g);
+        return rxRenderPick();
+    }
+    const v = item.dataset.v;
+    const mode = rx.pick?.mode;
+    rxClosePick();
+    if (mode === 'scope') rxChangeScope(v);
+    else if (mode === 'move') rxMoveTo(v);
+    else if (mode === 'bmove') rxMoveSel(v);
 }
 
 const rxScopeName = scope => scope === 'g' ? '全局正则' : scope.startsWith('p:') ? `预设「${scope.slice(2)}」` : `角色「${ctx().characters.find(x => x.avatar === scope.slice(2))?.name ?? scope.slice(2)}」`;
@@ -3402,7 +3452,6 @@ async function rxLoad(scope) {
     if (scope !== 'g') await fullChar(ctx().characters.find(x => x.avatar === scope.slice(2)));
     Object.assign(rx, { scope, list: structuredClone(await rxStore(scope)), undo: [], redo: [], dirty: false });
     rx.sel.clear();
-    $('#rs_panel .rs_rx_bmove').empty();
 }
 
 function rxRegex(str) {
@@ -3421,8 +3470,8 @@ function rxRun(script, text) {
     });
 }
 
-async function rxFillScope() {
-    $('#rs_panel .rs_rx_scope').html(await rxScopeOpts(rx.scope)).val(rx.scope);
+function rxFillScope() {
+    $('#rs_panel .rs_rx_scope').text(rxScopeName(rx.scope));
 }
 
 function rxRowHtml(s) {
@@ -3439,13 +3488,12 @@ function rxRows() {
     return rx.list.filter(s => !q || String(s.scriptName).toLowerCase().includes(q) || String(s.findRegex).toLowerCase().includes(q));
 }
 
-async function rxRenderAct() {
+function rxRenderAct() {
     const ids = new Set(rx.list.map(x => x.id));
     rx.sel.forEach(id => { if (!ids.has(id)) rx.sel.delete(id); });
     const n = rx.sel.size;
     $('#rs_panel .rs_rx_act').toggle(n > 0);
     $('#rs_panel .rs_rx_count').text(`已选 ${n}`);
-    if (n && !$('#rs_panel .rs_rx_bmove option').length) $('#rs_panel .rs_rx_bmove').html(`<option value="">移到…</option>${await rxScopeOpts('', rx.scope)}`);
 }
 
 function rxToggleSel(id) {
@@ -3539,11 +3587,9 @@ async function rxImport(files) {
 }
 
 async function rxChangeScope(scope) {
-    if (rx.dirty && !(await askConfirm('正则还有改动没保存，切换会丢掉，继续吗？'))) {
-        $('#rs_panel .rs_rx_scope').val(rx.scope);
-        return;
-    }
+    if (scope === rx.scope || (rx.dirty && !(await askConfirm('正则还有改动没保存，切换会丢掉，继续吗？')))) return;
     await rxLoad(scope);
+    rxFillScope();
     rxRender();
 }
 
@@ -3648,12 +3694,11 @@ async function rxMoveTo(scope) {
     const s = rxEdValues();
     if (!String(s.scriptName).trim()) return toastr.warning('给正则起个名字');
     if (await rxMoveMany([s], scope)) rxCloseEd();
-    else $('#rs_panel .rs_rx_move').val('');
 }
 
 async function rxMoveSel(scope) {
     const items = rx.list.filter(x => rx.sel.has(x.id));
-    if (!(await rxMoveMany(items, scope))) $('#rs_panel .rs_rx_bmove').val('');
+    await rxMoveMany(items, scope);
 }
 
 async function rxRefreshChat() {
@@ -3691,7 +3736,7 @@ async function rxSave() {
     });
 }
 
-async function rxOpenEd(id) {
+function rxOpenEd(id) {
     const s = id ? rx.list.find(x => x.id === id) : rxBlank();
     if (!s) return;
     rx.ed = { id: id || null, item: structuredClone(s) };
@@ -3722,7 +3767,7 @@ async function rxOpenEd(id) {
 </div>
 <div class="rs_pz_ed_foot">
   ${id ? '<div class="rs_icon rs_rx_ed_act fa-solid fa-trash-can" data-a="del" title="删除"></div><div class="rs_icon rs_rx_ed_act fa-solid fa-clone" data-a="dup" title="复制一份"></div>' : ''}
-  <select class="rs_rx_move text_pole"><option value="">移到…</option>${await rxScopeOpts('', rx.scope)}</select>
+  <span class="rs_pz_card_btn rs_rx_move">移到…</span>
   <div class="rs_bar_spacer"></div>
   <div class="menu_button rs_rx_ed_act rs_pz_ed_ok" data-a="ok">${id ? '确定' : '添加'}</div>
 </div>`);
@@ -3797,6 +3842,7 @@ async function rxEdAct(a) {
 
 function rxReset() {
     rx.ed = null;
+    rx.pick = null;
     rx.dirty = false;
     rx.undo = [];
     rx.redo = [];
@@ -3807,7 +3853,7 @@ async function openRegex() {
     const o = await rxScopes();
     const known = rx.scope === 'g' || [...o.presets, ...o.chars].some(x => x.id === rx.scope);
     await rxLoad(known ? rx.scope : 'g');
-    await rxFillScope();
+    rxFillScope();
     rxRender();
 }
 
@@ -3876,9 +3922,14 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_pz_pick_close', () => pzOpenPick(false))
         .on('input', '#rs_panel .rs_pz_cf', function () { pzCardInput(this); })
         .on('change', '#rs_panel .rs_pz_cf', function () { pzCardDone(this); })
-        .on('click', '#rs_panel .rs_pz_card_btn', function () { pzCardAct(this); })
+        .on('click', '#rs_panel .rs_pz_card .rs_pz_card_btn', function () { pzCardAct(this); })
         .on('click', '#rs_panel .rs_pz_insert', () => pzInsert())
-        .on('change', '#rs_panel .rs_rx_scope', function () { rxChangeScope(this.value); })
+        .on('click', '#rs_panel .rs_rx_scope', () => rxOpenPick('scope'))
+        .on('click', '#rs_panel .rs_rx_bmove', () => rxOpenPick('bmove'))
+        .on('click', '#rs_panel .rs_rx_move', () => rxOpenPick('move'))
+        .on('click', '#rs_panel .rs_rx_pick_close', rxClosePick)
+        .on('input', '#rs_panel .rs_rx_pick_q', rxRenderPick)
+        .on('click', '#rs_panel .rs_rx_pick_list > .rs_pz_item', function () { rxPickTap(this); })
         .on('change', '#rs_panel .rs_rx_file', function () {
             const fs = [...(this.files || [])];
             this.value = '';
@@ -3901,14 +3952,12 @@ function bindPanelEvents() {
             rx.sel.clear();
             rxRender();
         })
-        .on('change', '#rs_panel .rs_rx_bmove', function () { rxMoveSel(this.value); })
         .on('click', '#rs_panel .rs_chip', function () {
             $(this).toggleClass('rs_on');
             rxTest();
         })
         .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
         .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
-        .on('change', '#rs_panel .rs_rx_move', function () { rxMoveTo(this.value); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
         .on('click', '#rs_panel .rs_pz_undo', () => pzStep(true))
         .on('click', '#rs_panel .rs_pz_redo', () => pzStep(false))
