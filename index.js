@@ -2025,7 +2025,12 @@ const snap = () => {
     const ta = bodyEl();
     return { v: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
 };
-const isDirty = () => !!state.target && state.target.kind !== 'reader' && !!bodyEl() && bodyEl().value !== state.target.initial;
+const isDirty = () => {
+    const t = state.target;
+    if (!t || t.kind === 'reader') return false;
+    if (t.kind === 'preset') return !!pz.tgt?.dirty;
+    return !!bodyEl() && bodyEl().value !== t.initial;
+};
 
 function ensureShell() {
     if ($('#rs_overlay').length) return;
@@ -2039,6 +2044,7 @@ function ensureShell() {
         <option value="persona">用户人设</option>
         <option value="world">世界书</option>
         <option value="reader">阅读</option>
+        <option value="preset">预设缝合</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
       <div class="rs_ball_toggle" title="显示或隐藏悬浮球"><span>悬浮球</span><i></i></div>
@@ -2095,6 +2101,46 @@ function ensureShell() {
       </div>
       <textarea class="rs_cliche_input" rows="4" spellcheck="false" placeholder="一行一个；中间隔字用 ……，比如 不是……而是&#10;想替换而不是删掉就写：极其 → 很"></textarea>
       <div class="menu_button rs_cliche_fix">一键处理全部八股</div>
+    </div>
+    <div class="rs_pz">
+      <div class="rs_pz_sec">
+        <div class="rs_bar rs_pz_head">
+          <span class="rs_pz_label">来源</span>
+          <select class="rs_pz_src text_pole"></select>
+          <select class="rs_pz_split text_pole">
+            <option value="auto">自动分条</option>
+            <option value="head">按标题</option>
+            <option value="blank">按空行</option>
+            <option value="whole">整篇一条</option>
+          </select>
+          <label class="rs_icon rs_pz_import fa-solid fa-file-import" title="导入 txt / Word / json"><input type="file" class="rs_pz_file" accept=".txt,.md,.json,.docx,.doc,text/plain,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>
+        </div>
+        <div class="rs_pz_filter">
+          <input type="text" class="rs_pz_q" data-side="src" placeholder="搜索名称或内容">
+          <select class="rs_pz_cat text_pole" data-side="src"></select>
+          <div class="rs_icon rs_pz_all fa-solid fa-check-double" title="全选列表里的"></div>
+        </div>
+        <div class="rs_pz_list rs_pz_src_list"></div>
+      </div>
+      <div class="rs_bar rs_pz_act">
+        <span class="rs_pz_count"></span>
+        <select class="rs_pz_pos text_pole"></select>
+        <div class="menu_button rs_pz_insert">插入</div>
+      </div>
+      <div class="rs_pz_sec">
+        <div class="rs_bar rs_pz_head">
+          <span class="rs_pz_label">目标</span>
+          <select class="rs_pz_tgt text_pole"></select>
+          <div class="rs_icon rs_pz_undo fa-solid fa-rotate-left" title="撤回"></div>
+          <div class="menu_button rs_pz_save">保存</div>
+        </div>
+        <div class="rs_pz_filter">
+          <input type="text" class="rs_pz_q" data-side="tgt" placeholder="搜索名称或内容">
+          <select class="rs_pz_cat text_pole" data-side="tgt"></select>
+        </div>
+        <div class="rs_pz_list rs_pz_tgt_list"></div>
+      </div>
+      <div class="rs_pz_ed"></div>
     </div>
     <div class="rs_reader">
       <div class="rs_bar rs_rd_bar">
@@ -2191,7 +2237,19 @@ function showTarget(t) {
     if (!t) return;
     ensureShell();
     clearSel();
-    $('#rs_panel').toggleClass('rs_mode_reader', t.kind === 'reader');
+    if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
+    $('#rs_panel').toggleClass('rs_mode_reader', t.kind === 'reader').toggleClass('rs_mode_preset', t.kind === 'preset');
+    if (t.kind === 'preset') {
+        state.target = t;
+        $('#rs_panel .rs_kind').val('preset');
+        $('#rs_panel .rs_title').text(t.subtitle);
+        if (settings().lastKind !== 'preset') {
+            settings().lastKind = 'preset';
+            ctx().saveSettingsDebounced();
+        }
+        openStitch();
+        return;
+    }
     if (t.kind === 'reader') {
         state.target = t;
         $('#rs_panel .rs_kind').val('reader');
@@ -2234,7 +2292,7 @@ function showTarget(t) {
 
 async function switchTarget(loader) {
     if (isDirty()) {
-        if (!(await askConfirm('正文改了还没保存，切换会丢掉改动，继续吗？'))) return false;
+        if (!(await askConfirm('有改动还没保存，切换会丢掉，继续吗？'))) return false;
         clearDraft();
     }
     const t = await loader();
@@ -2446,7 +2504,8 @@ function onGripUp() {
 }
 
 async function closePanel(force = false, keepDraft = false) {
-    if (!force && isDirty() && !(await askConfirm('正文改了还没保存，确定关闭吗？'))) return;
+    if (!force && isDirty() && !(await askConfirm('有改动还没保存，确定关闭吗？'))) return;
+    pzReset();
     if (keepDraft) saveDraftNow();
     else clearDraft();
     clearTimeout(state.typingTimer);
@@ -2504,6 +2563,787 @@ function openPanel(id) {
     showTarget(msgTarget(id));
 }
 
+const PZ_PREVIEW = 46;
+const PZ_UNDO = 50;
+const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#-]{2,}|^\s*[【\[〔「『].{1,24}[】\]〕」』]\s*$/;
+const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
+const PZ_CATS = [
+    ['破限', /破限|越狱|jailbreak|免责|无限制|不受限|审查|道德约束|nsfw|安全限制|安全准则|拒绝回答/i],
+    ['思维链', /\bcot\b|思维链|思考(?:过程|步骤|链)|<think|thinking|推理步骤|step.?by.?step/i],
+    ['文风', /文风|文笔|笔触|风格|描写|叙事|句式|八股|用词|修辞|prose|style/i],
+    ['格式', /格式|输出|字数|状态栏|小剧场|选项|排版|format|<content>|标签/i],
+    ['角色', /\{\{char\}\}|\{\{user\}\}|角色|人设|扮演|persona/i],
+    ['世界观', /世界观|世界设定|背景设定|lore|world/i],
+];
+const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
+
+const pz = { src: null, tgt: null, file: null, sel: new Set(), tl: [], ed: null };
+
+const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
+const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+
+async function pzPM() {
+    let pm = null;
+    try { pm = ctx().getPresetManager?.('openai') || null; } catch { }
+    if (!pm) {
+        try { pm = (await import('/scripts/preset-manager.js')).getPresetManager('openai'); } catch { }
+    }
+    return pm && typeof pm.getPresetList === 'function' ? pm : null;
+}
+
+async function pzLive(pm) {
+    const s = pm?.getPresetList?.().settings || ctx().chatCompletionSettings;
+    if (s) return s;
+    try { return (await import('/scripts/openai.js')).oai_settings || null; } catch { return null; }
+}
+
+function pzNames(pm) {
+    const { preset_names } = pm.getPresetList();
+    return Array.isArray(preset_names) ? [...preset_names] : Object.keys(preset_names || {});
+}
+
+function pzStored(pm, name) {
+    const { presets, preset_names } = pm.getPresetList();
+    const idx = Array.isArray(preset_names) ? preset_names.indexOf(name) : preset_names?.[name];
+    return idx === undefined || idx < 0 || !presets?.[idx] ? null : { idx, preset: presets[idx] };
+}
+
+function pzOrder(preset, create = true) {
+    if (!Array.isArray(preset.prompt_order)) {
+        if (!create) return null;
+        preset.prompt_order = [];
+    }
+    let o = preset.prompt_order.find(x => String(x.character_id) === '100001') || preset.prompt_order[0];
+    if (!o) {
+        if (!create) return null;
+        o = { character_id: 100001, order: [] };
+        preset.prompt_order.push(o);
+    }
+    if (!Array.isArray(o.order)) o.order = [];
+    return o;
+}
+
+function pzEntry(p, enabled, inOrder) {
+    return {
+        key: 'p:' + p.identifier,
+        id: p.identifier,
+        name: String(p.name ?? p.identifier ?? ''),
+        role: p.role || 'system',
+        content: String(p.content ?? ''),
+        raw: p,
+        enabled,
+        inOrder,
+        marker: !!p.marker,
+    };
+}
+
+function pzFromPreset(preset) {
+    const prompts = Array.isArray(preset?.prompts) ? preset.prompts : [];
+    const order = (preset && pzOrder(preset, false)?.order) || [];
+    const byId = new Map(prompts.map(p => [p.identifier, p]));
+    const seen = new Set();
+    const list = [];
+    order.forEach(o => {
+        const p = byId.get(o.identifier);
+        if (!p || seen.has(p.identifier)) return;
+        seen.add(p.identifier);
+        list.push(pzEntry(p, o.enabled !== false, true));
+    });
+    prompts.forEach(p => {
+        if (!seen.has(p.identifier)) list.push(pzEntry(p, false, false));
+    });
+    return pzClassify(list);
+}
+
+const pzIsDivider = e => !e.marker && !pzNorm(e.content) && PZ_DIVIDER.test(e.name);
+
+function pzGuess(e) {
+    for (const src of [e.name, String(e.content).slice(0, 800)]) {
+        for (const [cat, re] of PZ_CATS) if (re.test(src)) return cat;
+    }
+    return '其他';
+}
+
+function pzClassify(list) {
+    const grouped = list.filter(pzIsDivider).length >= 2;
+    let group = '未分组';
+    list.forEach(e => {
+        e.div = pzIsDivider(e);
+        if (e.marker) e.cat = '系统占位';
+        else if (!grouped) e.cat = pzGuess(e);
+        else {
+            if (e.div) group = e.name.replace(PZ_DECOR, ' ').replace(/\s+/g, ' ').trim() || group;
+            e.cat = group;
+        }
+    });
+    return list;
+}
+
+function pzMaps(list) {
+    const byId = new Map();
+    const byName = new Map();
+    list.forEach(e => {
+        if (e.id && !byId.has(e.id)) byId.set(e.id, e);
+        const n = e.name.trim();
+        if (n && !byName.has(n)) byName.set(n, e);
+    });
+    return { byId, byName };
+}
+
+const pzFind = (e, maps) => (e.id && maps.byId.get(e.id)) || maps.byName.get(e.name.trim()) || null;
+const pzSame = (a, b) => pzNorm(a.content) === pzNorm(b.content) && a.name.trim() === b.name.trim();
+
+async function pzUnzip(buf, path) {
+    const dv = new DataView(buf);
+    let eocd = -1;
+    for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) {
+        if (dv.getUint32(i, true) === 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    }
+    if (eocd < 0) throw new Error('不是有效的 Word 文档');
+    const dec = new TextDecoder();
+    let off = dv.getUint32(eocd + 16, true);
+    for (let n = dv.getUint16(eocd + 10, true); n > 0; n--) {
+        if (dv.getUint32(off, true) !== 0x02014b50) break;
+        const method = dv.getUint16(off + 10, true);
+        const size = dv.getUint32(off + 20, true);
+        const nlen = dv.getUint16(off + 28, true);
+        const elen = dv.getUint16(off + 30, true);
+        const clen = dv.getUint16(off + 32, true);
+        const local = dv.getUint32(off + 42, true);
+        if (dec.decode(new Uint8Array(buf, off + 46, nlen)) === path) {
+            const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+            const data = new Uint8Array(buf, start, size);
+            if (method === 0) return dec.decode(data);
+            if (typeof DecompressionStream !== 'function') throw new Error('这个浏览器读不了 Word，请另存为 txt 再导入');
+            const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+            return dec.decode(out);
+        }
+        off += 46 + nlen + elen + clen;
+    }
+    return null;
+}
+
+async function pzDocxText(buf) {
+    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    const val = el => el?.getAttributeNS(W, 'val') ?? el?.getAttribute('w:val') ?? '';
+    const xml = await pzUnzip(buf, 'word/document.xml');
+    if (!xml) throw new Error('不是有效的 Word 文档');
+    const levels = new Map();
+    const styles = await pzUnzip(buf, 'word/styles.xml').catch(() => null);
+    if (styles) {
+        const sd = new DOMParser().parseFromString(styles, 'application/xml');
+        for (const st of sd.getElementsByTagNameNS(W, 'style')) {
+            const id = st.getAttributeNS(W, 'styleId') ?? st.getAttribute('w:styleId');
+            const nm = val(st.getElementsByTagNameNS(W, 'name')[0]).toLowerCase();
+            const ol = st.getElementsByTagNameNS(W, 'outlineLvl')[0];
+            const m = nm.match(/^(?:heading|标题)\s*(\d)$/);
+            const lv = m ? Number(m[1]) : ol ? Number(val(ol)) + 1 : 0;
+            if (id && lv) levels.set(id, lv);
+        }
+    }
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const out = [];
+    for (const p of doc.getElementsByTagNameNS(W, 'p')) {
+        let text = '';
+        for (const n of p.getElementsByTagNameNS(W, '*')) {
+            if (n.localName === 't') text += n.textContent;
+            else if (n.localName === 'tab') text += '\t';
+            else if (n.localName === 'br' || n.localName === 'cr') text += '\n';
+        }
+        const ol = p.getElementsByTagNameNS(W, 'outlineLvl')[0];
+        const lv = levels.get(val(p.getElementsByTagNameNS(W, 'pStyle')[0])) || (ol ? Number(val(ol)) + 1 : 0);
+        out.push(lv && lv <= 6 && text.trim() ? '#'.repeat(lv) + ' ' + text.trim() : text);
+    }
+    return out.join('\n');
+}
+
+function pzWorldEntries(entries, prefix) {
+    return Object.values(entries || {})
+        .sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid))
+        .map((e, i) => ({
+            key: `${prefix}${e.uid ?? i}`,
+            id: null,
+            name: String(e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid ?? i}`),
+            role: 'system',
+            content: String(e.content ?? ''),
+            raw: null,
+            enabled: !e.disable,
+        }));
+}
+
+async function pzReadFile(file) {
+    const ext = String(file.name).split('.').pop().toLowerCase();
+    if (ext === 'doc') throw new Error('不支持旧版 .doc，请在 Word 里另存为 .docx 或 .txt');
+    const buf = await file.arrayBuffer();
+    if (ext === 'docx') return { text: await pzDocxText(buf) };
+    let text;
+    try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    } catch {
+        text = new TextDecoder('gbk').decode(buf);
+    }
+    text = text.replace(/^﻿/, '');
+    if (ext === 'json' || /^\s*[{[]/.test(text)) {
+        let obj = null;
+        try { obj = JSON.parse(text); } catch { }
+        if (Array.isArray(obj?.prompts)) return { entries: pzFromPreset(obj) };
+        if (obj?.entries && typeof obj.entries === 'object') return { entries: pzWorldEntries(obj.entries, 'f:') };
+        if (Array.isArray(obj)) {
+            return {
+                entries: obj.filter(x => x && typeof x === 'object').map((x, i) => ({
+                    key: `f:${i}`, id: null, raw: null, enabled: true, role: x.role || 'system',
+                    name: String(x.name ?? x.comment ?? x.title ?? `条目 ${i + 1}`),
+                    content: String(x.content ?? x.text ?? ''),
+                })),
+            };
+        }
+    }
+    return { text };
+}
+
+function pzSplitText(text, mode, fallback) {
+    text = String(text).replace(/\r\n?/g, '\n');
+    const lines = text.split('\n');
+    const headOf = l => {
+        const m = l.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/) || l.match(/^\s*【([^】]{1,30})】\s*$/);
+        return m ? m[1].trim() : null;
+    };
+    const tagOf = l => l.match(/^\s*<([A-Za-z_一-龥][\w一-龥-]*)(?:\s[^>]*)?>/)?.[1] || null;
+    const closeRe = t => new RegExp(`</${escapeRe(t)}\\s*>`);
+    const hasHead = lines.some(headOf);
+    const hasXml = lines.some(l => {
+        const t = tagOf(l);
+        return t && closeRe(t).test(text);
+    });
+    if (mode === 'auto') mode = hasHead || hasXml ? 'head' : 'whole';
+    const nameOf = t => (t.split('\n').find(x => x.trim()) || '').trim().slice(0, 20) || fallback;
+    if (mode === 'whole') return text.trim() ? [{ name: fallback, content: text.trim() }] : [];
+    if (mode === 'blank') return text.split(/\n[ \t]*\n+/).map(t => t.trim()).filter(Boolean).map(t => ({ name: nameOf(t), content: t }));
+
+    const out = [];
+    let cur = null;
+    let closing = null;
+    const flush = () => {
+        if (cur) {
+            const c = cur.lines.join('\n').trim();
+            if (c || cur.name) out.push({ name: cur.name || nameOf(c), content: c });
+        }
+        cur = null;
+    };
+    let pos = 0;
+    lines.forEach(l => {
+        const next = pos + l.length + 1;
+        if (closing) {
+            cur.lines.push(l);
+            if (closing.test(l)) {
+                closing = null;
+                flush();
+            }
+        } else if (hasHead && headOf(l)) {
+            flush();
+            cur = { name: headOf(l), lines: [] };
+        } else if (!hasHead && tagOf(l) && closeRe(tagOf(l)).test(text.slice(pos))) {
+            const t = tagOf(l);
+            flush();
+            cur = { name: t, lines: [l] };
+            if (closeRe(t).test(l.slice(l.indexOf('>') + 1))) flush();
+            else closing = closeRe(t);
+        } else {
+            if (!cur) cur = { name: '', lines: [] };
+            cur.lines.push(l);
+        }
+        pos = next;
+    });
+    flush();
+    return out;
+}
+
+function pzBuildFileSource() {
+    const f = pz.file;
+    const list = f.entries || pzSplitText(f.text, $('#rs_panel .rs_pz_split').val() || 'auto', f.name.replace(/\.[^.]+$/, ''));
+    pz.src = {
+        v: 'file',
+        entries: pzClassify(list.map((e, i) => (e.key ? e : { key: `f:${i}`, id: null, role: 'system', raw: null, enabled: true, ...e }))),
+    };
+}
+
+async function pzLoadFile(file) {
+    try {
+        const r = await pzReadFile(file);
+        pz.file = { name: file.name, ...r };
+        $('#rs_panel .rs_pz_split').val('auto');
+        pz.sel.clear();
+        pzBuildFileSource();
+        await pzFillSelects();
+        pzRender();
+        toastr.success(`读到 ${pz.src.entries.length} 条`);
+    } catch (e) {
+        toastr.error(e?.message || '读取文件失败');
+    }
+}
+
+async function pzSetSource(v) {
+    const pm = await pzPM();
+    pz.sel.clear();
+    if (v === 'file') {
+        if (pz.file) pzBuildFileSource();
+    } else if (v === 'cur') {
+        const live = await pzLive(pm);
+        pz.src = { v, entries: pzFromPreset({ prompts: live?.prompts || [], prompt_order: live?.prompt_order || [] }) };
+    } else if (v.startsWith('p:')) {
+        pz.src = { v, entries: pzFromPreset(pzStored(pm, v.slice(2))?.preset || {}) };
+    } else if (v.startsWith('w:')) {
+        const data = await ctx().loadWorldInfo(v.slice(2));
+        pz.src = { v, entries: pzClassify(pzWorldEntries(data?.entries, 'w:')) };
+    }
+}
+
+async function pzSetTarget(name) {
+    const pm = await pzPM();
+    const st = pzStored(pm, name);
+    if (!st) {
+        toastr.warning('找不到这个预设');
+        return false;
+    }
+    const preset = structuredClone(st.preset);
+    const current = name === pm.getSelectedPresetName();
+    if (current) {
+        const live = await pzLive(pm);
+        if (Array.isArray(live?.prompts)) {
+            preset.prompts = structuredClone(live.prompts);
+            preset.prompt_order = structuredClone(live.prompt_order || []);
+        }
+    }
+    if (!Array.isArray(preset.prompts)) preset.prompts = [];
+    pz.tgt = { name, preset, current, undo: [], dirty: false };
+    return true;
+}
+
+async function pzFillSelects() {
+    const pm = await pzPM();
+    const names = pzNames(pm);
+    const cur = pm.getSelectedPresetName();
+    const opt = (v, t) => `<option value="${escapeHtml(v)}">${escapeHtml(t)}</option>`;
+    const worlds = worldNames();
+    $('#rs_panel .rs_pz_src').html([
+        opt('cur', `当前预设：${cur}`),
+        pz.file ? opt('file', `文件：${pz.file.name}`) : '',
+        names.length > 1 ? `<optgroup label="其他预设">${names.filter(n => n !== cur).map(n => opt('p:' + n, n)).join('')}</optgroup>` : '',
+        worlds.length ? `<optgroup label="世界书">${worlds.map(n => opt('w:' + n, n)).join('')}</optgroup>` : '',
+    ].join('')).val(pz.src?.v || 'cur');
+    $('#rs_panel .rs_pz_tgt').html(names.map(n => opt(n, n + (n === cur ? '（当前）' : ''))).join('')).val(pz.tgt?.name || cur);
+}
+
+function pzFilter(list, side) {
+    const q = String($(`#rs_panel .rs_pz_q[data-side="${side}"]`).val() || '').trim().toLowerCase();
+    const c = $(`#rs_panel .rs_pz_cat[data-side="${side}"]`).val() || '';
+    return list.filter(e => (!c || e.cat === c) && (!q || e.name.toLowerCase().includes(q) || e.content.toLowerCase().includes(q)));
+}
+
+function pzFillCats(list, side) {
+    const $s = $(`#rs_panel .rs_pz_cat[data-side="${side}"]`);
+    const cur = $s.val();
+    const cats = [...new Set(list.map(e => e.cat))];
+    $s.html('<option value="">全部分类</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join(''));
+    $s.val(cats.includes(cur) ? cur : '');
+}
+
+function pzRowHtml(e, side, other) {
+    const st = other ? (pzSame(other, e) ? 'same' : 'diff') : side === 'src' ? 'new' : '';
+    const sel = side === 'src' && pz.sel.has(e.key);
+    const tag = st ? `<span class="rs_pz_tag rs_pz_${st}">${{ new: '新', diff: '不同', same: '相同' }[st]}</span>` : '';
+    const cat = e.div ? '' : `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>`;
+    const pv = e.marker ? '系统占位，没有内容' : e.content.replace(/\s+/g, ' ').trim().slice(0, PZ_PREVIEW);
+    const lead = side === 'src' ? `<span class="rs_pz_cb fa-${sel ? 'solid fa-square-check' : 'regular fa-square'}"></span>` : '';
+    const tail = side === 'src'
+        ? '<span class="rs_icon rs_pz_edit fa-solid fa-pen" title="编辑"></span>'
+        : `<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
+    const cls = ['rs_pz_row', e.div && 'rs_pz_div', sel && 'rs_pz_sel', side === 'tgt' && !e.enabled && 'rs_pz_off'].filter(Boolean).join(' ');
+    return `<div class="${cls}" data-k="${escapeHtml(e.key)}">${lead}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${tag}${cat}</div>${pv ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
+}
+
+function pzRender() {
+    pz.tl = pz.tgt ? pzFromPreset(pz.tgt.preset) : [];
+    const src = pz.src?.entries || [];
+    const tMaps = pzMaps(pz.tl);
+    const sMaps = pzMaps(src);
+
+    pzFillCats(src, 'src');
+    const sRows = pzFilter(src, 'src');
+    $('#rs_panel .rs_pz_src_list').html(sRows.length
+        ? sRows.map(e => pzRowHtml(e, 'src', pzFind(e, tMaps))).join('')
+        : `<div class="rs_empty">${src.length ? '没有符合的条目' : '这里没有条目。可以点右上角的文件图标导入 txt、Word 或 json。'}</div>`);
+    $('#rs_panel .rs_pz_split').toggle(pz.src?.v === 'file' && !!pz.file?.text);
+
+    pzFillCats(pz.tl, 'tgt');
+    const tRows = pzFilter(pz.tl, 'tgt');
+    $('#rs_panel .rs_pz_tgt_list').html(tRows.length
+        ? tRows.map(e => pzRowHtml(e, 'tgt', pz.src ? pzFind(e, sMaps) : null)).join('')
+        : `<div class="rs_empty">${pz.tl.length ? '没有符合的条目' : '这个预设还没有条目'}</div>`);
+    $('#rs_panel .rs_pz_undo').toggleClass('rs_off', !pz.tgt?.undo.length);
+    $('#rs_panel .rs_pz_save').toggleClass('rs_off', !pz.tgt?.dirty).text(pz.tgt?.dirty ? '保存' : '已保存');
+
+    const $pos = $('#rs_panel .rs_pz_pos');
+    const keep = $pos.val();
+    const after = pz.tl.filter(e => e.inOrder);
+    $pos.html('<option value="end">插到最后</option><option value="start">插到最前</option>'
+        + (after.length ? `<optgroup label="插在这条后面">${after.map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name || '（无名）')}</option>`).join('')}</optgroup>` : ''));
+    $pos.val(keep && $pos.find(`option[value="${CSS.escape(keep)}"]`).length ? keep : 'end');
+    pzRenderAct();
+}
+
+function pzRenderAct() {
+    const maps = pzMaps(pz.tl);
+    const picks = (pz.src?.entries || []).filter(e => pz.sel.has(e.key));
+    let add = 0;
+    let rep = 0;
+    picks.forEach(e => {
+        const o = pzFind(e, maps);
+        if (!o) add++;
+        else if (!pzSame(o, e)) rep++;
+    });
+    $('#rs_panel .rs_pz_count').text(picks.length ? `已选 ${picks.length}` : '未选择');
+    $('#rs_panel .rs_pz_insert')
+        .text(add || rep ? [add && `插入 ${add}`, rep && `替换 ${rep}`].filter(Boolean).join(' · ') : '插入')
+        .toggleClass('rs_off', !(add || rep));
+}
+
+function pzToggleSel(key, on) {
+    if (on ?? !pz.sel.has(key)) pz.sel.add(key);
+    else pz.sel.delete(key);
+    const sel = pz.sel.has(key);
+    $(`#rs_panel .rs_pz_src_list .rs_pz_row[data-k="${CSS.escape(key)}"]`).toggleClass('rs_pz_sel', sel)
+        .find('.rs_pz_cb').attr('class', `rs_pz_cb fa-${sel ? 'solid fa-square-check' : 'regular fa-square'}`);
+}
+
+function pzSelectAll() {
+    const rows = pzFilter(pz.src?.entries || [], 'src');
+    const all = rows.length && rows.every(e => pz.sel.has(e.key));
+    rows.forEach(e => pzToggleSel(e.key, !all));
+    pzRenderAct();
+}
+
+function pzPush() {
+    const t = pz.tgt;
+    t.undo.push(structuredClone({ prompts: t.preset.prompts, prompt_order: t.preset.prompt_order }));
+    if (t.undo.length > PZ_UNDO) t.undo.shift();
+}
+
+function pzChanged() {
+    pz.tgt.dirty = true;
+    pzRender();
+}
+
+function pzUndo() {
+    const s = pz.tgt?.undo.pop();
+    if (!s) return;
+    pz.tgt.preset.prompts = s.prompts;
+    pz.tgt.preset.prompt_order = s.prompt_order;
+    pzChanged();
+}
+
+function pzInsert() {
+    const t = pz.tgt;
+    const picks = (pz.src?.entries || []).filter(e => pz.sel.has(e.key));
+    if (!t || !picks.length) return;
+    pzPush();
+    const prompts = t.preset.prompts;
+    const order = pzOrder(t.preset).order;
+    const maps = pzMaps(pz.tl);
+    const pos = $('#rs_panel .rs_pz_pos').val() || 'end';
+    const idx = order.findIndex(o => o.identifier === pos);
+    let at = pos === 'start' ? 0 : idx >= 0 ? idx + 1 : order.length;
+    let add = 0;
+    let rep = 0;
+    picks.forEach(e => {
+        const o = pzFind(e, maps);
+        if (o) {
+            const p = prompts.find(x => x.identifier === o.id);
+            if (p && !pzSame(pzEntry(p), e)) {
+                Object.assign(p, { name: e.name, role: e.role || p.role, content: e.content });
+                rep++;
+            }
+            return;
+        }
+        const base = e.raw ? structuredClone(e.raw) : {};
+        const id = base.identifier && !prompts.some(x => x.identifier === base.identifier) ? base.identifier : pzUid();
+        const p = {
+            system_prompt: false, marker: false, injection_position: 0, injection_depth: 4, forbid_overrides: false,
+            ...base, identifier: id, name: e.name, role: e.role || base.role || 'system', content: e.content,
+        };
+        prompts.push(p);
+        order.splice(at++, 0, { identifier: id, enabled: true });
+        const ne = pzEntry(p, true, true);
+        maps.byId.set(id, ne);
+        if (!maps.byName.has(ne.name.trim())) maps.byName.set(ne.name.trim(), ne);
+        add++;
+    });
+    if (!add && !rep) {
+        t.undo.pop();
+        toastr.info('选中的条目目标里都有，内容也一样');
+        return;
+    }
+    pz.sel.clear();
+    pzChanged();
+    toastr.success([add && `插入 ${add} 条`, rep && `替换 ${rep} 条`].filter(Boolean).join('，') + '，记得点保存');
+}
+
+function pzToggleEnabled(key) {
+    const e = pz.tl.find(x => x.key === key);
+    if (!e) return;
+    pzPush();
+    const order = pzOrder(pz.tgt.preset).order;
+    const o = order.find(x => x.identifier === e.id);
+    if (o) o.enabled = !e.enabled;
+    else order.push({ identifier: e.id, enabled: true });
+    pzChanged();
+}
+
+async function pzWrite(pm, name, preset) {
+    const res = await fetch('/api/presets/save', {
+        method: 'POST',
+        headers: ctx().getRequestHeaders(),
+        body: JSON.stringify({ apiId: 'openai', name, preset }),
+    });
+    if (!res.ok) {
+        toastr.error('保存预设失败');
+        return false;
+    }
+    const st = pzStored(pm, name);
+    if (st) pm.getPresetList().presets[st.idx] = preset;
+    if (name === pm.getSelectedPresetName()) {
+        const live = await pzLive(pm);
+        if (live) {
+            live.prompts = structuredClone(preset.prompts);
+            live.prompt_order = structuredClone(preset.prompt_order);
+            ctx().saveSettingsDebounced();
+            try { (await import('/scripts/openai.js')).promptManager?.render?.(false); } catch { }
+        }
+    }
+    return true;
+}
+
+async function pzSave() {
+    const t = pz.tgt;
+    if (!t?.dirty) return;
+    const pm = await pzPM();
+    const before = structuredClone(pzStored(pm, t.name)?.preset || null);
+    const $btn = $('#rs_panel .rs_pz_save').addClass('rs_off');
+    let ok = false;
+    try {
+        ok = await pzWrite(pm, t.name, structuredClone(t.preset));
+    } catch (e) {
+        console.error('[重生成拼接] 保存预设失败', e);
+        toastr.error('保存预设失败');
+    }
+    $btn.removeClass('rs_off');
+    if (!ok) return;
+    t.dirty = false;
+    pzRender();
+    toastr.success(`「${t.name}」已保存，点这里撤回`, '', {
+        onclick: async () => {
+            if (!before || !(await pzWrite(pm, t.name, before))) return;
+            if (state.target?.kind === 'preset' && pz.tgt?.name === t.name && !pz.tgt.dirty) {
+                await pzSetTarget(t.name);
+                pzRender();
+            }
+            toastr.info('已撤回');
+        },
+    });
+}
+
+function pzDiffHtml(a, b) {
+    const A = pzNorm(a).split('\n');
+    const B = pzNorm(b).split('\n');
+    const n = A.length;
+    const m = B.length;
+    if (n * m > 600000) return '<div class="rs_empty">内容太长，没法逐行对比</div>';
+    const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+    const ops = [];
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+        if (A[i] === B[j]) {
+            ops.push([' ', A[i++]]);
+            j++;
+        } else if (dp[i + 1][j] >= dp[i][j + 1]) ops.push(['-', A[i++]]);
+        else ops.push(['+', B[j++]]);
+    }
+    while (i < n) ops.push(['-', A[i++]]);
+    while (j < m) ops.push(['+', B[j++]]);
+    if (ops.every(o => o[0] === ' ')) return '<div class="rs_empty">两边内容完全一样</div>';
+    const line = ([t, s]) => `<div class="rs_pz_dl${t === '-' ? ' rs_pz_dl_del' : t === '+' ? ' rs_pz_dl_add' : ''}">${t === ' ' ? '' : t + ' '}${escapeHtml(s) || '&nbsp;'}</div>`;
+    let html = '<div class="rs_pz_legend"><span class="rs_pz_dl_del">− 只有目标有</span><span class="rs_pz_dl_add">+ 只有来源有</span></div>';
+    for (let k = 0; k < ops.length;) {
+        if (ops[k][0] !== ' ') {
+            html += line(ops[k++]);
+            continue;
+        }
+        let e = k;
+        while (e < ops.length && ops[e][0] === ' ') e++;
+        const run = ops.slice(k, e);
+        html += run.length > 6
+            ? run.slice(0, 2).map(line).join('') + `<div class="rs_pz_dl rs_pz_dl_skip">…… ${run.length - 4} 行相同 ……</div>` + run.slice(-2).map(line).join('')
+            : run.map(line).join('');
+        k = e;
+    }
+    return html;
+}
+
+function pzEdEntry() {
+    const ed = pz.ed;
+    return ed.side === 'src' ? pz.src?.entries.find(x => x.key === ed.key) : pz.tl.find(x => x.key === ed.key);
+}
+
+function pzOpenEd(side, key) {
+    pz.ed = { side, key };
+    const e = pzEdEntry();
+    if (!e) return;
+    const other = side === 'src' ? pzFind(e, pzMaps(pz.tl)) : pz.src ? pzFind(e, pzMaps(pz.src.entries)) : null;
+    pz.ed.other = other;
+    const tgt = side === 'tgt';
+    const order = tgt ? pz.tl.filter(x => x.inOrder) : [];
+    const at = order.findIndex(x => x.key === key);
+    $('#rs_panel .rs_pz_ed').html(`
+<div class="rs_bar"><div class="rs_bar_title">${tgt ? '目标条目' : '来源条目'}${tgt && at >= 0 ? `<span class="rs_pz_ed_pos">第 ${at + 1} / ${order.length} 条</span>` : ''}</div><div class="rs_icon rs_pz_ed_act fa-solid fa-xmark" data-a="close" title="关闭"></div></div>
+<div class="rs_pz_ed_row"><input type="text" class="rs_pz_ed_name" placeholder="条目名称"><select class="rs_pz_ed_role text_pole">${PZ_ROLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></div>
+${other ? `<div class="rs_pz_ed_tabs"><div class="rs_pz_ed_tab rs_on" data-t="edit">内容</div><div class="rs_pz_ed_tab" data-t="diff">对比${tgt ? '来源' : '目标'}</div></div>` : ''}
+${tgt ? '' : '<div class="rs_pz_ed_note">这里只改要插入的内容，不会动来源本身</div>'}
+<textarea class="rs_pz_ed_ta" spellcheck="false"></textarea>
+<div class="rs_pz_diff"></div>
+<div class="rs_pz_ed_foot">
+  ${tgt && e.inOrder ? '<div class="rs_icon rs_pz_ed_act fa-solid fa-arrow-up" data-a="up" title="上移"></div><div class="rs_icon rs_pz_ed_act fa-solid fa-arrow-down" data-a="down" title="下移"></div>' : ''}
+  ${tgt && !e.marker ? '<div class="rs_icon rs_pz_ed_act fa-solid fa-trash-can" data-a="del" title="删除"></div>' : ''}
+  <div class="rs_bar_spacer"></div>
+  ${other && !e.marker ? `<div class="menu_button rs_pz_ed_act" data-a="${tgt ? 'take' : 'push'}">${tgt ? '用来源内容' : '替换到目标'}</div>` : ''}
+  <div class="menu_button rs_pz_ed_act rs_pz_ed_ok" data-a="ok">确定</div>
+</div>`);
+    $('#rs_panel .rs_pz_ed_name').val(e.name);
+    $('#rs_panel .rs_pz_ed_role').val(PZ_ROLES.some(r => r[0] === e.role) ? e.role : 'system');
+    $('#rs_panel .rs_pz_ed_ta').val(e.content).prop('readOnly', e.marker).attr('placeholder', e.marker ? '系统占位条目，内容由酒馆自动填入' : '');
+    $('#rs_panel .rs_pz').addClass('rs_pz_editing');
+}
+
+function pzCloseEd() {
+    pz.ed = null;
+    $('#rs_panel .rs_pz').removeClass('rs_pz_editing');
+    $('#rs_panel .rs_pz_ed').empty();
+}
+
+function pzEdValues() {
+    return {
+        name: String($('#rs_panel .rs_pz_ed_name').val()),
+        role: String($('#rs_panel .rs_pz_ed_role').val()),
+        content: String($('#rs_panel .rs_pz_ed_ta').val()),
+    };
+}
+
+function pzEdTab(t) {
+    $('#rs_panel .rs_pz_ed_tab').each(function () { $(this).toggleClass('rs_on', this.dataset.t === t); });
+    const diff = t === 'diff';
+    $('#rs_panel .rs_pz_ed_ta').toggle(!diff);
+    $('#rs_panel .rs_pz_diff').toggle(diff);
+    if (!diff) return;
+    const mine = pzEdValues().content;
+    const other = pz.ed.other.content;
+    $('#rs_panel .rs_pz_diff').html(pz.ed.side === 'tgt' ? pzDiffHtml(mine, other) : pzDiffHtml(other, mine));
+}
+
+function pzPrompt(id) {
+    return pz.tgt.preset.prompts.find(p => p.identifier === id);
+}
+
+async function pzEdAct(a) {
+    const ed = pz.ed;
+    if (!ed) return;
+    const e = pzEdEntry();
+    if (a === 'close' || !e) return pzCloseEd();
+    const v = pzEdValues();
+    if (a === 'take') {
+        $('#rs_panel .rs_pz_ed_ta').val(ed.other.content);
+        pzEdTab('edit');
+        return;
+    }
+    if (ed.side === 'src') {
+        Object.assign(e, v);
+        if (a === 'push') {
+            const p = pzPrompt(ed.other.id);
+            if (p) {
+                pzPush();
+                Object.assign(p, v);
+                pz.tgt.dirty = true;
+                toastr.success('已替换到目标，记得点保存');
+            }
+        }
+        pzCloseEd();
+        pzRender();
+        return;
+    }
+    const p = pzPrompt(e.id);
+    if (!p) return pzCloseEd();
+    const order = pzOrder(pz.tgt.preset).order;
+    if (a === 'ok') {
+        if (p.name !== v.name || p.role !== v.role || (!e.marker && String(p.content ?? '') !== v.content)) {
+            pzPush();
+            Object.assign(p, e.marker ? { name: v.name, role: v.role } : v);
+            pz.tgt.dirty = true;
+        }
+        pzCloseEd();
+        pzRender();
+    } else if (a === 'up' || a === 'down') {
+        const i = order.findIndex(o => o.identifier === e.id);
+        const j = i + (a === 'up' ? -1 : 1);
+        if (i < 0 || j < 0 || j >= order.length) return;
+        pzPush();
+        [order[i], order[j]] = [order[j], order[i]];
+        pz.tgt.dirty = true;
+        pzRender();
+        $('#rs_panel .rs_pz_ed_pos').text(`第 ${j + 1} / ${order.length} 条`);
+    } else if (a === 'del') {
+        if (!(await askConfirm(`从「${pz.tgt.name}」里删掉「${e.name}」？保存前可以撤回`))) return;
+        pzPush();
+        pz.tgt.preset.prompts = pz.tgt.preset.prompts.filter(x => x.identifier !== e.id);
+        pz.tgt.preset.prompt_order.forEach(o => { if (Array.isArray(o.order)) o.order = o.order.filter(x => x.identifier !== e.id); });
+        pz.tgt.dirty = true;
+        pzCloseEd();
+        pzRender();
+    }
+}
+
+async function pzChangeTarget(name) {
+    if (pz.tgt?.dirty && !(await askConfirm(`「${pz.tgt.name}」还有改动没保存，切换会丢掉，继续吗？`))) {
+        $('#rs_panel .rs_pz_tgt').val(pz.tgt.name);
+        return;
+    }
+    if (await pzSetTarget(name)) pzRender();
+}
+
+function pzReset() {
+    pz.tgt = null;
+    if (pz.src?.v !== 'file') pz.src = null;
+    pz.sel.clear();
+    pz.ed = null;
+}
+
+async function openStitch() {
+    const pm = await pzPM();
+    if (!pm) {
+        toastr.error('这个版本的酒馆读不到预设');
+        return;
+    }
+    pzCloseEd();
+    if (!pz.tgt && !(await pzSetTarget(pm.getSelectedPresetName()))) return;
+    if (!pz.src) await pzSetSource('cur');
+    await pzFillSelects();
+    pzRender();
+}
+
 const LOADERS = {
     msg: async () => {
         const id = lastAiIndex();
@@ -2523,6 +3363,13 @@ const LOADERS = {
         }
         return { kind: 'reader', subtitle: '整个聊天', initial: '' };
     },
+    preset: async () => {
+        if (!(await pzPM())) {
+            toastr.warning('这个版本的酒馆读不到预设');
+            return null;
+        }
+        return { kind: 'preset', subtitle: '对话补全预设', initial: '' };
+    },
 };
 
 async function openFromBall() {
@@ -2540,6 +3387,40 @@ async function openFromBall() {
 
 function bindPanelEvents() {
     $(document)
+        .on('change', '#rs_panel .rs_pz_src', async function () {
+            await pzSetSource(this.value);
+            pzRender();
+        })
+        .on('change', '#rs_panel .rs_pz_split', () => {
+            if (!pz.file?.text) return;
+            pz.sel.clear();
+            pzBuildFileSource();
+            pzRender();
+        })
+        .on('change', '#rs_panel .rs_pz_file', function () {
+            const f = this.files?.[0];
+            this.value = '';
+            if (f) pzLoadFile(f);
+        })
+        .on('input change', '#rs_panel .rs_pz_q, #rs_panel .rs_pz_cat', pzRender)
+        .on('click', '#rs_panel .rs_pz_all', pzSelectAll)
+        .on('click', '#rs_panel .rs_pz_src_list .rs_pz_row', function (e) {
+            const key = this.dataset.k;
+            if ($(e.target).closest('.rs_pz_edit').length) return pzOpenEd('src', key);
+            pzToggleSel(key);
+            pzRenderAct();
+        })
+        .on('click', '#rs_panel .rs_pz_tgt_list .rs_pz_row', function (e) {
+            const key = this.dataset.k;
+            if ($(e.target).closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
+            pzOpenEd('tgt', key);
+        })
+        .on('click', '#rs_panel .rs_pz_insert', pzInsert)
+        .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
+        .on('click', '#rs_panel .rs_pz_undo', pzUndo)
+        .on('click', '#rs_panel .rs_pz_save', pzSave)
+        .on('click', '#rs_panel .rs_pz_ed_tab', function () { pzEdTab(this.dataset.t); })
+        .on('click', '#rs_panel .rs_pz_ed_act', function () { pzEdAct(this.dataset.a); })
         .on('click', '#rs_wand_open', () => {
             $('#extensionsMenu').hide();
             openFromBall();
@@ -2804,9 +3685,11 @@ function clampBall(x, y) {
     const el = document.getElementById('rs_ball');
     const w = el?.offsetWidth || settings().ballSize;
     const h = el?.offsetHeight || settings().ballSize;
+    const top = Math.max(0, ...['#top-settings-holder', '#top-bar'].map(q => document.querySelector(q)?.getBoundingClientRect().bottom || 0));
+    const bottom = document.querySelector('#send_form')?.getBoundingClientRect().top || window.innerHeight;
     return {
         x: Math.min(Math.max(0, x), window.innerWidth - w),
-        y: Math.min(Math.max(0, y), window.innerHeight - h),
+        y: Math.min(Math.max(top, y), Math.max(top, bottom - h)),
     };
 }
 
