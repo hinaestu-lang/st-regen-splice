@@ -1617,6 +1617,10 @@
     display: none;
 }
 
+#rs_panel .rs_rx_act.rs_on {
+    display: flex;
+}
+
 #rs_panel .rs_rx_bdel {
     flex: none;
     margin: 0;

@@ -3417,13 +3417,13 @@ function rxRenderPick() {
     const skip = pk.mode === 'scope' ? null : rx.scope;
     const row = (v, label) => `<div class="rs_pz_item" data-v="${escapeHtml(v)}"><div class="rs_pz_row${v === rx.scope ? ' rs_pz_sel' : ''}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(label)}</span></div></div></div></div>`;
     const group = (g, title, list, curMark) => {
-        const items = list.filter(x => x.id !== skip);
+        const items = list.filter(x => x.id !== skip).sort((x, y) => (y.id === curMark) - (x.id === curMark));
         const labels = nameLabels(items, curMark);
         const hits = items.filter(x => !q || labels.get(x.id).toLowerCase().includes(q));
         if (!hits.length) return '';
         const open = q || rx.unfold.has(g);
         return `<div class="rs_pz_item" data-g="${g}"><div class="rs_pz_row rs_pz_div"><span class="rs_pz_fold fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'}"></span><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${title}</span><span class="rs_pz_cnt">${hits.length}</span></div></div></div></div>`
-            + (open ? hits.map(x => row(x.id, labels.get(x.id))).join('') : '');
+            + (open ? hits : hits.filter(x => x.id === curMark)).map(x => row(x.id, labels.get(x.id))).join('');
     };
     $('#rs_panel .rs_rx_pick_list').html(
         (skip !== 'g' && (!q || '全局正则'.includes(q)) ? row('g', '全局正则') : '')
@@ -3492,7 +3492,7 @@ function rxRenderAct() {
     const ids = new Set(rx.list.map(x => x.id));
     rx.sel.forEach(id => { if (!ids.has(id)) rx.sel.delete(id); });
     const n = rx.sel.size;
-    $('#rs_panel .rs_rx_act').toggle(n > 0);
+    $('#rs_panel .rs_rx_act').toggleClass('rs_on', n > 0);
     $('#rs_panel .rs_rx_count').text(`已选 ${n}`);
 }
 
