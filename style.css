@@ -1292,7 +1292,8 @@
     word-break: break-word;
 }
 
-#rs_panel .rs_pz_head .rs_pz_kind {
+#rs_panel .rs_pz_head .rs_pz_kind,
+#rs_panel .rs_pz_head .rs_pz_tkind {
     flex: none;
     width: auto;
     max-width: 40%;
@@ -1731,4 +1732,58 @@
 
 #rs_panel .rs_cc .rs_pz_row {
     border-bottom: 1px solid var(--rs-line);
+}
+
+#rs_panel .rs_pz_cats {
+    display: none;
+    flex: none;
+    gap: 6px;
+    padding: 6px 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-bottom: 1px solid var(--rs-line);
+    scrollbar-width: none;
+}
+
+#rs_panel .rs_pz_cats::-webkit-scrollbar {
+    display: none;
+}
+
+#rs_panel .rs_pz_cats.rs_on {
+    display: flex;
+}
+
+#rs_panel .rs_pz_cats .rs_chip {
+    flex: none;
+    white-space: nowrap;
+    padding: 3px 10px;
+    font-size: 12px;
+}
+
+#rs_panel .rs_pz_row.rs_pz_div {
+    border-left: 3px solid var(--rs-accent);
+    padding-left: 9px;
+}
+
+#rs_panel .rs_pz_div .rs_pz_nm {
+    color: var(--rs-accent);
+}
+
+#rs_panel .rs_pz_card_foot {
+    position: relative;
+    min-height: 26px;
+}
+
+#rs_panel .rs_pz_card_same {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    opacity: 0.6;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+#rs_panel .rs_pz_card .rs_pz_cmpbox {
+    max-height: 40vh;
 }

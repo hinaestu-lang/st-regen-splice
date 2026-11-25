@@ -1872,6 +1872,7 @@ function ensureShell() {
           <div class="rs_icon rs_pz_foldall fa-solid fa-layer-group" data-side="src" title="全部展开/收起分类"></div>
           <div class="rs_icon rs_pz_all fa-solid fa-check-double" title="全选列表里的"></div>
         </div>
+        <div class="rs_pz_cats" data-side="src"></div>
         <div class="rs_pz_list rs_pz_src_list"></div>
       </div>
       <div class="rs_grip"><span></span></div>
@@ -1883,6 +1884,7 @@ function ensureShell() {
       <div class="rs_pz_sec">
         <div class="rs_bar rs_pz_head">
           <span class="rs_pz_label">目标</span>
+          <select class="rs_pz_tkind text_pole"><option value="p">预设</option><option value="w">世界书</option></select>
           <select class="rs_pz_tgt text_pole"></select>
           <div class="rs_icon rs_pz_undo fa-solid fa-rotate-left" title="撤回"></div>
           <div class="rs_icon rs_pz_redo fa-solid fa-rotate-right" title="重做"></div>
@@ -1892,6 +1894,7 @@ function ensureShell() {
           <input type="text" class="rs_pz_q" data-side="tgt" placeholder="搜索名称或内容">
           <div class="rs_icon rs_pz_foldall fa-solid fa-layer-group" data-side="tgt" title="全部展开/收起分类"></div>
         </div>
+        <div class="rs_pz_cats" data-side="tgt"></div>
         <div class="rs_pz_list rs_pz_tgt_list" data-drop="pz"></div>
       </div>
       <div class="rs_pz_pick">
@@ -2414,7 +2417,7 @@ const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
-const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), cmp: new Set(), hunks: {}, unfold: new Set(), pos: 'end', picking: false, editing: null };
+const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, unfold: new Set(), pos: 'end', picking: false, editing: null };
 
 const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
 const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -2607,6 +2610,7 @@ function pzWorldEntries(entries, prefix) {
             role: 'system',
             content: String(e.content ?? ''),
             raw: null,
+            wraw: e,
             enabled: !e.disable,
         }));
 }
@@ -2686,7 +2690,16 @@ async function pzSetSource(v) {
     }
 }
 
-async function pzSetTarget(name) {
+async function pzSetTarget(name, type = pz.tgt?.type || 'p') {
+    if (type === 'w') {
+        const data = structuredClone(await ctx().loadWorldInfo(name));
+        if (!data?.entries) {
+            toastr.warning('读不到这本世界书');
+            return false;
+        }
+        pz.tgt = { type, name, data, undo: [], redo: [], dirty: false };
+        return true;
+    }
     const pm = await pzPM();
     const st = pzStored(pm, name);
     if (!st) {
@@ -2694,8 +2707,7 @@ async function pzSetTarget(name) {
         return false;
     }
     const preset = structuredClone(st.preset);
-    const current = name === pm.getSelectedPresetName();
-    if (current) {
+    if (name === pm.getSelectedPresetName()) {
         const live = await pzLive(pm);
         if (Array.isArray(live?.prompts)) {
             preset.prompts = structuredClone(live.prompts);
@@ -2703,10 +2715,40 @@ async function pzSetTarget(name) {
         }
     }
     if (!Array.isArray(preset.prompts)) preset.prompts = [];
-    pz.tgt = { name, preset, current, undo: [], redo: [], dirty: false };
+    pz.tgt = { type, name, data: preset, undo: [], redo: [], dirty: false };
     return true;
 }
 
+const pzIsWorld = () => pz.tgt?.type === 'w';
+
+function pzWorldList(data) {
+    return Object.values(data.entries || {}).sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid));
+}
+
+function pzFromWorld(data) {
+    return pzClassify(pzWorldList(data).map(w => ({
+        key: 'w:' + w.uid,
+        id: String(w.uid),
+        name: String(w.comment ?? ''),
+        role: 'system',
+        content: String(w.content ?? ''),
+        raw: null,
+        wraw: w,
+        enabled: !w.disable,
+        inOrder: true,
+        marker: false,
+    })));
+}
+
+function pzTgtEntries() {
+    if (!pz.tgt) return [];
+    return pzIsWorld() ? pzFromWorld(pz.tgt.data) : pzFromPreset(pz.tgt.data);
+}
+
+function pzReorderWorld(ids) {
+    const ents = pz.tgt.data.entries;
+    ids.forEach((id, i) => { if (ents[id]) ents[id].displayIndex = i; });
+}
 async function pzFillSelects() {
     const pm = await pzPM();
     const names = pzNames(pm);
@@ -2723,7 +2765,11 @@ async function pzFillSelects() {
     $('#rs_panel .rs_pz_src').toggle(kind !== 'cur')
         .html(kind === 'cur' ? '' : lists[kind].join('') || `<option value="">${{ p: '没有其他预设', w: '没有世界书', f: '还没导入文件' }[kind]}</option>`)
         .val(kind === 'cur' ? '' : v);
-    $('#rs_panel .rs_pz_tgt').html(names.map(n => opt(n, n + (n === cur ? '（当前）' : ''))).join('')).val(pz.tgt?.name || cur);
+    const tt = pz.tgt?.type || 'p';
+    $('#rs_panel .rs_pz_tkind').val(tt);
+    $('#rs_panel .rs_pz_tgt').html(tt === 'w'
+        ? worldNames().map(n => opt(n, n)).join('')
+        : names.map(n => opt(n, n + (n === cur ? '（当前）' : ''))).join('')).val(pz.tgt?.name || '');
 }
 
 async function pzSetKind(kind) {
@@ -2761,6 +2807,12 @@ function pzGroupSize(list, i) {
 function pzVisible(list, side, foldKey) {
     const q = pzQuery(side);
     if (q) return list.filter(e => pzHit(e, q)).map(e => ({ e, flat: true }));
+    const ck = pz.catf[side];
+    const ci = ck ? list.findIndex(e => e.key === ck && e.div) : -1;
+    if (ci >= 0) {
+        const n = pzGroupSize(list, ci);
+        return [{ e: list[ci], n, open: true }, ...list.slice(ci + 1, ci + 1 + n).map(e => ({ e }))];
+    }
     const out = [];
     let open = true;
     let left = 0;
@@ -2782,7 +2834,7 @@ function pzRowHtml(e, side, other, x = {}) {
     const sel = side === 'src' && pz.sel.has(e.key);
     const tag = st ? `<span class="rs_pz_tag rs_pz_${st}">${{ new: '新', diff: '不同', same: '相同' }[st]}</span>` : '';
     const cat = x.flat && e.cat && !e.div ? `<span class="rs_pz_cat_tag">${escapeHtml(e.cat)}</span>` : '';
-    const count = e.div && !x.flat ? `<span class="rs_pz_cnt">${x.n}</span>` : '';
+    const count = e.div && !x.flat ? `<span class="rs_pz_cnt">${x.n} 条</span>` : '';
     const fold = e.div && !x.flat ? `<span class="rs_pz_fold fa-solid ${x.open ? 'fa-chevron-down' : 'fa-chevron-right'}"></span>` : '';
     const pv = e.marker ? '系统占位，没有内容' : e.content.replace(/\s+/g, ' ').trim().slice(0, PZ_PREVIEW);
     const lead = side === 'src' ? '<span class="rs_cb_hit"><span class="rs_cb"></span></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
@@ -2792,20 +2844,24 @@ function pzRowHtml(e, side, other, x = {}) {
     return `<div class="${cls}">${lead}${fold}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${count}${tag}${cat}</div>${pv && !pz.open.has(side + e.key) ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
 }
 
+function pzCmpHtml(e, side, other) {
+    return side === 'tgt' ? pzDiffHtml(e.content, other.content, side + e.key) : pzDiffHtml(other.content, e.content, side + e.key);
+}
+
 function pzCardHtml(e, side, other) {
     const roles = PZ_ROLES.map(([v, t]) => `<option value="${v}" ${e.role === v ? 'selected' : ''}>${t}</option>`).join('');
-    const cmp = other && pz.cmp.has(side + e.key);
-    const body = cmp
-        ? `<div class="rs_pz_cmpbox">${side === 'tgt' ? pzDiffHtml(e.content, other.content, side + e.key) : pzDiffHtml(other.content, e.content, side + e.key)}</div>`
-        : `<textarea class="rs_pz_cf rs_pz_ct" data-f="content" spellcheck="false" ${e.marker ? 'readonly placeholder="系统占位条目，内容由酒馆自动填入"' : ''}>${escapeHtml(e.content)}</textarea>`;
+    const showRole = !(side === 'tgt' && pzIsWorld());
+    const differs = other && !e.marker && pzNorm(other.content) !== pzNorm(e.content);
+    const same = other && !e.marker && !differs;
     return `<div class="rs_pz_card">
-  <div class="rs_pz_card_row"><input type="text" class="rs_pz_cf" data-f="name" value="${escapeHtml(e.name)}" placeholder="条目名称"><select class="rs_pz_cf text_pole" data-f="role">${roles}</select></div>
-  ${body}
+  <div class="rs_pz_card_row"><input type="text" class="rs_pz_cf" data-f="name" value="${escapeHtml(e.name)}" placeholder="条目名称">${showRole ? `<select class="rs_pz_cf text_pole" data-f="role">${roles}</select>` : ''}</div>
+  <textarea class="rs_pz_cf rs_pz_ct" data-f="content" spellcheck="false" ${e.marker ? 'readonly placeholder="系统占位条目，内容由酒馆自动填入"' : ''}>${escapeHtml(e.content)}</textarea>
+  ${differs ? `<div class="rs_pz_cmpbox">${pzCmpHtml(e, side, other)}</div>` : ''}
   <div class="rs_pz_card_foot">
-    ${side === 'src' && !cmp ? '<span class="rs_pz_card_note">这里改的只影响插入的内容</span>' : ''}
+    ${side === 'src' && !same ? '<span class="rs_pz_card_note">这里改的只影响插入的内容</span>' : ''}
+    ${same ? `<span class="rs_pz_card_same">和${side === 'tgt' ? '来源' : '目标'}相比无更改</span>` : ''}
     <div class="rs_bar_spacer"></div>
-    ${other && !e.marker ? `<span class="rs_pz_card_btn${cmp ? ' rs_on' : ''}" data-a="cmp">${cmp ? '回到内容' : side === 'tgt' ? '对比来源' : '对比目标'}</span>` : ''}
-    ${cmp && side === 'tgt' && !pzSame(other, e) ? '<span class="rs_pz_card_btn" data-a="take">全部用来源的</span>' : ''}
+    ${differs && side === 'tgt' ? '<span class="rs_pz_card_btn" data-a="take">全部用来源的</span>' : ''}
     ${side === 'tgt' && !e.marker ? '<span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除</span>' : ''}
   </div>
 </div>`;
@@ -2838,7 +2894,12 @@ function pzRenderList(side) {
         ? (src.length ? '没有符合的条目' : '这里没有条目。可以点右上角的文件图标导入 txt、Word 或 json。')
         : (pz.tl.length ? '没有符合的条目' : '这个预设还没有条目');
     $(`#rs_panel .rs_pz_${side}_list`).html(rows.length ? rows.map(v => pzItemHtml(v, side, maps)).join('') : `<div class="rs_empty">${empty}</div>`);
-    $(`#rs_panel .rs_pz_foldall[data-side="${side}"]`).toggle(list.some(e => e.div));
+    const heads = list.filter(e => e.div);
+    $(`#rs_panel .rs_pz_foldall[data-side="${side}"]`).toggle(heads.length > 0);
+    if (!heads.some(e => e.key === pz.catf[side])) pz.catf[side] = '';
+    $(`#rs_panel .rs_pz_cats[data-side="${side}"]`).toggleClass('rs_on', heads.length > 0).html(heads.length
+        ? `<span class="rs_chip${pz.catf[side] ? '' : ' rs_on'}" data-c="">全部</span>` + heads.map(e => `<span class="rs_chip${pz.catf[side] === e.key ? ' rs_on' : ''}" data-c="${escapeHtml(e.key)}">${escapeHtml(e.cat)}</span>`).join('')
+        : '');
 }
 
 function pzPosLabel() {
@@ -2850,7 +2911,7 @@ function pzPosLabel() {
 
 function pzRender() {
     pz.editing = null;
-    pz.tl = pz.tgt ? pzFromPreset(pz.tgt.preset) : [];
+    pz.tl = pzTgtEntries();
     pzRenderList('src');
     pzRenderList('tgt');
     pzFitCards();
@@ -2975,11 +3036,12 @@ function pzSetField(side, e, f, v, session) {
         pzPush();
         pz.editing = session ? e.key : null;
     }
-    p[f] = v;
+    p[pzIsWorld() && f === 'name' ? 'comment' : f] = v;
     e[f] = v;
     pz.tgt.dirty = true;
     pzButtons();
 }
+const PZ_CMP_DELAY = 350;
 
 function pzCardInput(el) {
     const item = el.closest('.rs_pz_item');
@@ -2987,7 +3049,30 @@ function pzCardInput(el) {
     const f = el.dataset.f;
     if (f === 'content') pzFit(el);
     const e = pzEntryOf(side, item.dataset.k);
-    if (e && !(f === 'content' && e.marker)) pzSetField(side, e, f, el.value, true);
+    if (!e || (f === 'content' && e.marker)) return;
+    pzSetField(side, e, f, el.value, true);
+    if (f !== 'content') return;
+    clearTimeout(pz.cmpTimer);
+    pz.cmpTimer = setTimeout(() => pzRefreshCmp(item, side, e), PZ_CMP_DELAY);
+}
+
+function pzRefreshCmp(item, side, e) {
+    if (!item.isConnected) return;
+    const other = side === 'src' ? pzFind(e, pzMaps(pz.tl)) : pz.src ? pzFind(e, pzMaps(pz.src.entries)) : null;
+    const $card = $(item).children('.rs_pz_card');
+    const $box = $card.children('.rs_pz_cmpbox');
+    const differs = other && pzNorm(other.content) !== pzNorm(e.content);
+    const same = other && !differs;
+    if (differs) {
+        if ($box.length) $box.html(pzCmpHtml(e, side, other));
+        else $card.children('.rs_pz_ct').after(`<div class="rs_pz_cmpbox">${pzCmpHtml(e, side, other)}</div>`);
+    } else $box.remove();
+    const $foot = $card.children('.rs_pz_card_foot');
+    $foot.children('.rs_pz_card_same').remove();
+    $foot.children('.rs_pz_card_note').toggle(!same);
+    if (same) $foot.prepend(`<span class="rs_pz_card_same">和${side === 'tgt' ? '来源' : '目标'}相比无更改</span>`);
+    $foot.children('[data-a="take"]').remove();
+    if (differs && side === 'tgt') $foot.children('[data-a="del"]').before('<span class="rs_pz_card_btn" data-a="take">全部用来源的</span>');
 }
 
 function pzCardDone(el) {
@@ -3009,11 +3094,6 @@ async function pzCardAct(btn) {
     const e = pzEntryOf(side, key);
     if (!e) return;
     const a = btn.dataset.a;
-    if (a === 'cmp') {
-        if (pz.cmp.has(side + key)) pz.cmp.delete(side + key);
-        else pz.cmp.add(side + key);
-        return pzRefreshItem(side, key);
-    }
     if (a === 'take') {
         const o = pz.src && pzFind(e, pzMaps(pz.src.entries));
         if (o) pzSetField(side, e, 'content', o.content);
@@ -3022,8 +3102,11 @@ async function pzCardAct(btn) {
     if (a === 'del') {
         if (!(await askConfirm(`从「${pz.tgt.name}」里删掉「${e.name}」？保存前可以撤回`))) return;
         pzPush();
-        pz.tgt.preset.prompts = pz.tgt.preset.prompts.filter(x => x.identifier !== e.id);
-        pz.tgt.preset.prompt_order.forEach(o => { if (Array.isArray(o.order)) o.order = o.order.filter(x => x.identifier !== e.id); });
+        if (pzIsWorld()) delete pz.tgt.data.entries[e.id];
+        else {
+            pz.tgt.data.prompts = pz.tgt.data.prompts.filter(x => x.identifier !== e.id);
+            pz.tgt.data.prompt_order.forEach(o => { if (Array.isArray(o.order)) o.order = o.order.filter(x => x.identifier !== e.id); });
+        }
         pz.open.delete(side + key);
         pzChanged();
     }
@@ -3077,7 +3160,7 @@ function pzSelectAll() {
     pzRenderAct();
 }
 
-const pzSnap = t => structuredClone({ prompts: t.preset.prompts, prompt_order: t.preset.prompt_order });
+const pzSnap = t => structuredClone(t.type === 'w' ? { entries: t.data.entries } : { prompts: t.data.prompts, prompt_order: t.data.prompt_order });
 
 function pzPush() {
     const t = pz.tgt;
@@ -3096,7 +3179,7 @@ function pzStep(back) {
     const s = t && (back ? t.undo : t.redo).pop();
     if (!s) return;
     (back ? t.redo : t.undo).push(pzSnap(t));
-    Object.assign(t.preset, s);
+    Object.assign(t.data, s);
     pzChanged();
 }
 
@@ -3107,42 +3190,67 @@ function pzButtons() {
     $('#rs_panel .rs_pz_save').toggleClass('rs_off', !t?.dirty).text(t?.dirty ? '保存' : '已保存');
 }
 
-function pzInsert(here) {
+let pzWiApi;
+
+async function pzNewWorldEntry(data) {
+    if (pzWiApi === undefined) {
+        try { pzWiApi = await import('/scripts/world-info.js'); } catch { pzWiApi = null; }
+    }
+    const made = pzWiApi?.createWorldInfoEntry?.(null, data);
+    if (made) return made;
+    const uids = Object.keys(data.entries).map(Number).filter(Number.isInteger);
+    const uid = uids.length ? Math.max(...uids) + 1 : 0;
+    return (data.entries[uid] = { uid, key: [], keysecondary: [], comment: '', content: '', constant: false, selective: true, order: 100, position: 0, disable: false, probability: 100, useProbability: true, depth: 4 });
+}
+
+async function pzInsert(here) {
     const t = pz.tgt;
     const picks = (pz.src?.entries || []).filter(e => pz.sel.has(e.key));
     if (!t || !picks.length) return;
     pzPush();
-    const prompts = t.preset.prompts;
-    const order = pzOrder(t.preset).order;
+    const world = pzIsWorld();
     const maps = pzMaps(pz.tl);
     const pos = here || pz.pos || 'end';
-    const idx = order.findIndex(o => o.identifier === pos);
-    let at = pos === 'start' ? 0 : idx >= 0 ? idx + 1 : order.length;
+    const ids = world ? pz.tl.map(x => x.id) : pzOrder(t.data).order.map(o => o.identifier);
+    const idx = ids.indexOf(pos);
+    let at = pos === 'start' ? 0 : idx >= 0 ? idx + 1 : ids.length;
     let add = 0;
     let rep = 0;
-    picks.forEach(e => {
+    for (const e of picks) {
         const o = pzFind(e, maps);
         if (o) {
-            const p = prompts.find(x => x.identifier === o.id);
-            if (p && !pzSame(pzEntry(p), e)) {
-                Object.assign(p, { name: e.name, role: e.role || p.role, content: e.content });
+            const p = pzPrompt(o.id);
+            if (p && !pzSame(o, e)) {
+                if (world) Object.assign(p, { comment: e.name, content: e.content });
+                else Object.assign(p, { name: e.name, role: e.role || p.role, content: e.content });
                 rep++;
             }
-            return;
+            continue;
         }
-        const base = e.raw ? structuredClone(e.raw) : {};
-        const id = base.identifier && !prompts.some(x => x.identifier === base.identifier) ? base.identifier : pzUid();
-        const p = {
-            system_prompt: false, marker: false, injection_position: 0, injection_depth: 4, forbid_overrides: false,
-            ...base, identifier: id, name: e.name, role: e.role || base.role || 'system', content: e.content,
-        };
-        prompts.push(p);
-        order.splice(at++, 0, { identifier: id, enabled: true });
-        const ne = pzEntry(p, true, true);
+        let id;
+        if (world) {
+            const w = await pzNewWorldEntry(t.data);
+            const base = e.wraw ? structuredClone(e.wraw) : { constant: true };
+            delete base.uid;
+            Object.assign(w, base, { comment: e.name, content: e.content, disable: false });
+            id = String(w.uid);
+        } else {
+            const prompts = t.data.prompts;
+            const base = e.raw ? structuredClone(e.raw) : {};
+            id = base.identifier && !prompts.some(x => x.identifier === base.identifier) ? base.identifier : pzUid();
+            prompts.push({
+                system_prompt: false, marker: false, injection_position: 0, injection_depth: 4, forbid_overrides: false,
+                ...base, identifier: id, name: e.name, role: e.role || base.role || 'system', content: e.content,
+            });
+            pzOrder(t.data).order.splice(at, 0, { identifier: id, enabled: true });
+        }
+        ids.splice(at++, 0, id);
+        const ne = { ...e, id, key: (world ? 'w:' : 'p:') + id };
         maps.byId.set(id, ne);
         if (!maps.byName.has(ne.name.trim())) maps.byName.set(ne.name.trim(), ne);
         add++;
-    });
+    }
+    if (world) pzReorderWorld(ids);
     if (!add && !rep) {
         t.undo.pop();
         toastr.info('选中的条目目标里都有，内容也一样');
@@ -3152,12 +3260,21 @@ function pzInsert(here) {
     pzChanged();
     toastr.success([add && `插入 ${add} 条`, rep && `替换 ${rep} 条`].filter(Boolean).join('，') + '，记得点保存');
 }
-
 function pzMove(key, toKey, after) {
     const a = pz.tl.find(x => x.key === key);
     const b = pz.tl.find(x => x.key === toKey);
     if (!a || !b) return;
-    const order = pzOrder(pz.tgt.preset).order;
+    if (pzIsWorld()) {
+        const ids = pz.tl.map(x => x.id);
+        const i = ids.indexOf(a.id);
+        const next = ids.filter(x => x !== a.id);
+        next.splice(next.indexOf(b.id) + (after ? 1 : 0), 0, a.id);
+        if (next[i] === a.id) return;
+        pzPush();
+        pzReorderWorld(next);
+        return pzChanged();
+    }
+    const order = pzOrder(pz.tgt.data).order;
     const next = [...order];
     const i = next.findIndex(o => o.identifier === a.id);
     const item = i >= 0 ? next.splice(i, 1)[0] : { identifier: a.id, enabled: false };
@@ -3168,18 +3285,19 @@ function pzMove(key, toKey, after) {
     order.splice(0, order.length, ...next);
     pzChanged();
 }
-
 function pzToggleEnabled(key) {
     const e = pz.tl.find(x => x.key === key);
     if (!e) return;
     pzPush();
-    const order = pzOrder(pz.tgt.preset).order;
-    const o = order.find(x => x.identifier === e.id);
-    if (o) o.enabled = !e.enabled;
-    else order.push({ identifier: e.id, enabled: true });
+    if (pzIsWorld()) pz.tgt.data.entries[e.id].disable = e.enabled;
+    else {
+        const order = pzOrder(pz.tgt.data).order;
+        const o = order.find(x => x.identifier === e.id);
+        if (o) o.enabled = !e.enabled;
+        else order.push({ identifier: e.id, enabled: true });
+    }
     pzChanged();
 }
-
 async function pzWrite(pm, name, preset) {
     const res = await fetch('/api/presets/save', {
         method: 'POST',
@@ -3204,18 +3322,33 @@ async function pzWrite(pm, name, preset) {
     return true;
 }
 
+async function pzWriteWorld(name, data) {
+    const c = ctx();
+    try {
+        await c.saveWorldInfo(name, data, true);
+        c.reloadWorldInfoEditor?.(name);
+        return true;
+    } catch (e) {
+        console.error('[重生成拼接] 保存世界书失败', e);
+        toastr.error('保存世界书失败');
+        return false;
+    }
+}
+
 async function pzSave() {
     const t = pz.tgt;
     if (!t?.dirty) return;
-    const pm = await pzPM();
-    const before = structuredClone(pzStored(pm, t.name)?.preset || null);
+    const world = t.type === 'w';
+    const pm = world ? null : await pzPM();
+    const before = world ? structuredClone(await ctx().loadWorldInfo(t.name)) : structuredClone(pzStored(pm, t.name)?.preset || null);
+    const write = d => (world ? pzWriteWorld(t.name, d) : pzWrite(pm, t.name, d));
     const $btn = $('#rs_panel .rs_pz_save').addClass('rs_off');
     let ok = false;
     try {
-        ok = await pzWrite(pm, t.name, structuredClone(t.preset));
+        ok = await write(structuredClone(t.data));
     } catch (e) {
-        console.error('[重生成拼接] 保存预设失败', e);
-        toastr.error('保存预设失败');
+        console.error('[重生成拼接] 保存失败', e);
+        toastr.error('保存失败');
     }
     $btn.removeClass('rs_off');
     if (!ok) return;
@@ -3223,16 +3356,15 @@ async function pzSave() {
     pzRender();
     toastr.success(`「${t.name}」已保存，点这里撤回`, '', {
         onclick: async () => {
-            if (!before || !(await pzWrite(pm, t.name, before))) return;
-            if (state.target?.kind === 'preset' && pz.tgt?.name === t.name && !pz.tgt.dirty) {
-                await pzSetTarget(t.name);
+            if (!before || !(await write(before))) return;
+            if (state.target?.kind === 'preset' && pz.tgt?.name === t.name && pz.tgt.type === t.type && !pz.tgt.dirty) {
+                await pzSetTarget(t.name, t.type);
                 pzRender();
             }
             toastr.info('已撤回');
         },
     });
 }
-
 const PZ_DIFF_MAX = 600000;
 const PZ_CHAR_MAX = 250000;
 const PZ_KEEP_CTX = 2;
@@ -3322,23 +3454,32 @@ function pzDiffHtml(a, b, hk) {
 }
 
 function pzPrompt(id) {
-    return pz.tgt.preset.prompts.find(p => p.identifier === id);
+    return pzIsWorld() ? pz.tgt.data.entries[id] : pz.tgt.data.prompts.find(p => p.identifier === id);
 }
-
-async function pzChangeTarget(name) {
+async function pzChangeTarget(name, type = pz.tgt?.type || 'p') {
     if (pz.tgt?.dirty && !(await askConfirm(`「${pz.tgt.name}」还有改动没保存，切换会丢掉，继续吗？`))) {
-        $('#rs_panel .rs_pz_tgt').val(pz.tgt.name);
+        await pzFillSelects();
         return;
     }
-    if (await pzSetTarget(name)) pzRender();
+    if (!name) {
+        const pm = await pzPM();
+        name = type === 'w' ? worldNames()[0] : pm?.getSelectedPresetName();
+        if (!name) {
+            toastr.info(type === 'w' ? '还没有世界书' : '没有预设');
+            return pzFillSelects();
+        }
+    }
+    if (await pzSetTarget(name, type)) {
+        pz.pos = 'end';
+        await pzFillSelects();
+        pzRender();
+    }
 }
-
 function pzReset() {
     pz.tgt = null;
     if (!pz.src?.v.startsWith('f:')) pz.src = null;
     pz.sel.clear();
     pz.open.clear();
-    pz.cmp.clear();
     pz.hunks = {};
     pz.picking = false;
     pz.pos = 'end';
@@ -3350,7 +3491,7 @@ async function openStitch() {
         toastr.error('这个版本的酒馆读不到预设');
         return;
     }
-    if (!pz.tgt && !(await pzSetTarget(pm.getSelectedPresetName()))) return;
+    if (!pz.tgt && !(await pzSetTarget(pm.getSelectedPresetName(), 'p'))) return;
     if (!pz.src) await pzSetSource('cur');
     await pzFillSelects();
     pzRender();
@@ -3905,7 +4046,7 @@ const LOADERS = {
             toastr.warning('这个版本的酒馆读不到预设');
             return null;
         }
-        return { kind: 'preset', subtitle: '对话补全预设', initial: '' };
+        return { kind: 'preset', subtitle: '预设 · 世界书', initial: '' };
     },
     regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
     set: async () => ({ kind: 'set', subtitle: '插件设置', initial: '' }),
@@ -3945,6 +4086,13 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_pz_all', pzSelectAll)
         .on('click', '#rs_panel .rs_pz_foldall', function () { pzFoldAll(this.dataset.side); })
+        .on('click', '#rs_panel .rs_pz_cats .rs_chip', function () {
+            const side = this.parentElement.dataset.side;
+            pz.catf[side] = this.dataset.c;
+            pzRenderList(side);
+            pzFitCards();
+            $(`#rs_panel .rs_pz_${side}_list`).scrollTop(0);
+        })
         .on('click', '#rs_panel .rs_pz_src_list > .rs_pz_item, #rs_panel .rs_pz_tgt_list > .rs_pz_item', function (e) { pzTapItem(this, e.target); })
         .on('click', '#rs_panel .rs_pz_pick_list > .rs_pz_item', function (e) { pzPickTap(this, !$(e.target).closest('.rs_pz_pickit').length); })
         .on('click', '#rs_panel .rs_pz_pos', () => pzOpenPick(true))
@@ -3982,13 +4130,14 @@ function bindPanelEvents() {
             rx.sel.clear();
             rxRender();
         })
-        .on('click', '#rs_panel .rs_chip', function () {
+        .on('click', '#rs_panel .rs_rx_form .rs_chip', function () {
             $(this).toggleClass('rs_on');
             rxTest();
         })
         .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
         .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
+        .on('change', '#rs_panel .rs_pz_tkind', function () { pzChangeTarget('', this.value); })
         .on('click', '#rs_panel .rs_pz_undo', () => pzStep(true))
         .on('click', '#rs_panel .rs_pz_redo', () => pzStep(false))
         .on('click', '#rs_panel .rs_pz_save', pzSave)
