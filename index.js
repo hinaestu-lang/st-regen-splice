@@ -4727,7 +4727,13 @@ async function shelfAddTag() {
 
 async function shelfAfterTags() {
     if (shelf.kind === 'char') {
-        try { (await import('/script.js')).printCharactersDebounced?.(); } catch { }
+        try {
+            const tags = await import('/scripts/tags.js');
+            tags.printTagFilters?.();
+            const chid = ctx().characterId;
+            if (chid !== undefined && chid !== null) tags.applyTagsOnCharacterSelect?.(chid);
+            (await import('/script.js')).printCharactersDebounced?.();
+        } catch { }
     } else await personaRefresh();
     await shelfRender();
 }
