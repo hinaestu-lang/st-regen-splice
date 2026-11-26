@@ -1787,3 +1787,22 @@
 #rs_panel .rs_pz_card .rs_pz_cmpbox {
     max-height: 40vh;
 }
+
+#rs_panel .rs_cc .rs_pz_filter {
+    padding: 0 0 6px;
+}
+
+#rs_panel .rs_cc_row {
+    padding-left: 22px;
+}
+
+#rs_panel .rs_cb.rs_cb_part::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    right: 3px;
+    top: 50%;
+    height: 2px;
+    margin-top: -1px;
+    background: var(--rs-accent);
+}
