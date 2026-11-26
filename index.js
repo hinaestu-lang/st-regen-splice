@@ -4693,7 +4693,37 @@ async function shelfMoveSheet() {
     shelf.moveFrom = inTag;
 }
 
+async function shelfSnap() {
+    const c = ctx();
+    if (shelf.kind === 'char') return { kind: 'char', tags: structuredClone(c.tags), map: structuredClone(c.tagMap) };
+    const { pu } = await personaInfo();
+    return { kind: 'persona', titles: Object.fromEntries(Object.keys(pu.personas || {}).map(id => [id, personaTitle(pu, id)])) };
+}
+
+function shelfUndoToast(text, snap) {
+    toastr.success(`${text}，点这里撤回`, '', {
+        onclick: async () => {
+            const c = ctx();
+            if (snap.kind === 'char') {
+                c.tags.splice(0, c.tags.length, ...snap.tags);
+                Object.keys(c.tagMap).forEach(k => delete c.tagMap[k]);
+                Object.assign(c.tagMap, snap.map);
+            } else {
+                for (const [id, t] of Object.entries(snap.titles)) await personaSetTitle(id, t);
+            }
+            c.saveSettingsDebounced();
+            const kind = shelf.kind;
+            shelf.kind = snap.kind;
+            await shelfAfterTags();
+            shelf.kind = kind;
+            if (kind !== snap.kind) await shelfRender();
+            toastr.info('已撤回');
+        },
+    });
+}
+
 async function shelfMoveTo(target) {
+    const snap = await shelfSnap();
     const ch = shelf.kind === 'char';
     const from = shelf.moveFrom;
     let id = target;
@@ -4715,7 +4745,7 @@ async function shelfMoveTo(target) {
     shelfCloseSheet();
     shelf.sel.clear();
     await shelfAfterTags();
-    toastr.success(`移好了 ${items.length} 个`);
+    shelfUndoToast(`移好了 ${items.length} 个`, snap);
 }
 async function shelfTagSheet(ids) {
     const items = (await shelfItems()).filter(x => ids.includes(x.id));
@@ -4786,6 +4816,7 @@ async function shelfAfterTags() {
 async function shelfTagManage(a) {
     const id = shelf.folder;
     if (!id || id === SHELF_UNTAGGED) return;
+    const snap = await shelfSnap();
     const c = ctx();
     const name = shelfTags().find(t => t.id === id)?.name ?? id;
     if (a === 'tagren') {
@@ -4808,6 +4839,7 @@ async function shelfTagManage(a) {
     }
     c.saveSettingsDebounced();
     await shelfAfterTags();
+    shelfUndoToast(a === 'tagren' ? '改好了' : '清掉了', snap);
 }
 
 async function shelfSetFav(ids, on) {
