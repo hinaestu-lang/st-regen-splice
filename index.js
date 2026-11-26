@@ -1261,7 +1261,7 @@ function clicheRanges(text) {
     if (!settings().clicheWhole || !words.length) return words;
 
     const out = [];
-    eachSentence(text, (sen, a, b) => {
+    eachSentence(text, (_, a, b) => {
         if (words.some(([x, y]) => x < b && y > a)) out.push([a, b]);
     });
     return out;
@@ -1280,7 +1280,7 @@ function fixAllCliche() {
     let replaced = 0;
     let removed = 0;
     if (settings().clicheWhole) {
-        eachSentence(text, (sen, a, b) => {
+        eachSentence(text, (_, a, b) => {
             if (hits.some(h => h.entry.to === null && h.a < b && h.b > a)) ops.push([a, b, '']);
         });
         removed = ops.length;
@@ -1298,7 +1298,7 @@ function fixAllCliche() {
     ops.sort((x, y) => y[0] - x[0]);
     let out = text;
     ops.forEach(([a, b, to]) => { out = out.slice(0, a) + to + out.slice(b); });
-    out = out.split('\n').filter((line, i, arr) => line.trim() || !(text.split('\n')[i]?.trim())).join('\n');
+    out = out.split('\n').filter((line, i) => line.trim() || !(text.split('\n')[i]?.trim())).join('\n');
     setBody(out, 0);
     const what = settings().clicheWhole ? '句' : '处';
     toastr.success([removed && `删掉 ${removed} ${what}`, replaced && `替换 ${replaced} 处`].filter(Boolean).join('，') + '，可以撤销');
@@ -3287,6 +3287,8 @@ function pzButtons() {
     $('#rs_panel .rs_pz_save').toggleClass('rs_off', !t?.dirty).text(t?.dirty ? '保存' : '已保存');
 }
 
+const pzSrcOn = e => !pz.src?.v.startsWith('f:') && !!e.enabled;
+
 let pzWiApi;
 
 async function pzNewWorldEntry(data) {
@@ -3329,7 +3331,7 @@ async function pzInsert(here) {
             const w = await pzNewWorldEntry(t.data);
             const base = e.wraw ? structuredClone(e.wraw) : { constant: true };
             delete base.uid;
-            Object.assign(w, base, { comment: e.name, content: e.content, disable: false });
+            Object.assign(w, base, { comment: e.name, content: e.content, disable: !pzSrcOn(e) });
             id = String(w.uid);
         } else {
             const prompts = t.data.prompts;
@@ -3339,7 +3341,7 @@ async function pzInsert(here) {
                 system_prompt: false, marker: false, injection_position: 0, injection_depth: 4, forbid_overrides: false,
                 ...base, identifier: id, name: e.name, role: e.role || base.role || 'system', content: e.content,
             });
-            pzOrder(t.data).order.splice(at, 0, { identifier: id, enabled: true });
+            pzOrder(t.data).order.splice(at, 0, { identifier: id, enabled: pzSrcOn(e) });
         }
         ids.splice(at++, 0, id);
         const ne = { ...e, id, key: (world ? 'w:' : 'p:') + id };
@@ -3904,7 +3906,7 @@ function rxRun(script, text) {
     return text.replace(re, (...args) => {
         const groups = [];
         for (let i = 1; i < args.length && typeof args[i] !== 'number'; i++) groups.push(args[i]);
-        return String(script.replaceString ?? '').replace(/\{\{match\}\}|\$&|\$(\d+)/gi, (x, n) => trim(n === undefined ? args[0] : groups[n - 1]));
+        return String(script.replaceString ?? '').replace(/\{\{match\}\}|\$&|\$(\d+)/gi, (_, n) => trim(n === undefined ? args[0] : groups[n - 1]));
     });
 }
 
@@ -5819,7 +5821,8 @@ function guardSelection() {
     const chat = document.getElementById('chat');
     if (!chat) return;
     const sel = window.getSelection();
-    if (!settings().selectGuard || !sel?.rangeCount || sel.isCollapsed) return selRelease(chat);
+    const typing = document.activeElement?.matches?.('textarea, input, [contenteditable="true"]');
+    if (typing || !settings().selectGuard || !sel?.rangeCount || sel.isCollapsed) return selRelease(chat);
     if (!selLock || !selLock.isConnected) {
         const node = sel.anchorNode;
         const mes = (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('#chat .mes');
