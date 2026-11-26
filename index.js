@@ -271,7 +271,7 @@ const BIN_KEY = 'bin';
 const BIN_DAYS = 30;
 const BIN_MAX = 300;
 const BIN_PREVIEW = 60;
-const BIN_TYPES = { card: '角色卡', persona: '用户人设', chat: '聊天文件', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
+const BIN_TYPES = { card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
 
 async function binAll() {
     const cut = Date.now() - BIN_DAYS * 864e5;
@@ -1147,7 +1147,8 @@ async function worldTarget(book, uid) {
     if (!entries.length) {
         return {
             kind: 'world',
-            pickers: `${WI_FIND}<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>`,
+            pickers: `${WI_FIND}<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>${WI_DEL}`,
+            book,
             refs: [{ label: '打开时', text: '' }], ref: 0, initial: '', empty: '这本世界书还没有条目',
             saveLabel: '保存', closeAfterSave: false, save: async () => false,
         };
@@ -1164,7 +1165,7 @@ async function worldTarget(book, uid) {
         kind: 'world',
         pickers: `${WI_FIND}<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
 <select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>
-${wiToggleHtml(!entry.disable)}`,
+${wiToggleHtml(!entry.disable)}${WI_DEL}`,
         book,
         uid: entry.uid,
         save: async text => {
@@ -1185,7 +1186,36 @@ ${wiToggleHtml(!entry.disable)}`,
 
 const WI_FIND = '<span class="rs_icon rs_wi_find fa-solid fa-magnifying-glass" title="搜索世界书"></span>';
 
+const WI_DEL = '<span class="rs_icon rs_wi_delbook fa-solid fa-trash-can" title="删除这本世界书"></span>';
+
 const wfind = { all: false, seq: 0, timer: 0 };
+
+async function wiDeleteBook() {
+    const book = state.target?.kind === 'world' ? state.target.book : null;
+    if (!book) return;
+    const c = ctx();
+    const data = await c.loadWorldInfo(book);
+    const n = Object.keys(data?.entries || {}).length;
+    const users = (c.characters || []).filter(x => x?.data?.extensions?.world === book).map(x => x.name);
+    const tip = users.length ? `\n还绑在 ${users.slice(0, 3).join('、')}${users.length > 3 ? ` 等 ${users.length} 张卡` : ''} 上，删了这些卡就用不到它了。` : '';
+    if (!(await askConfirm(`删除世界书「${book}」（${n} 个条目）？会放进回收站，${BIN_DAYS} 天内能恢复。${tip}${isDirty() ? '\n当前条目没保存的改动也会丢掉。' : ''}`))) return;
+    if (!data?.entries) return toastr.error('读不到这本世界书，没有删');
+    await binAdd({ type: 'book', label: book, sub: `${n} 个条目`, data: { name: book, data: structuredClone(data) } });
+    const wi = await pzWorldApi();
+    let ok = false;
+    try {
+        ok = wi?.deleteWorldInfo ? await wi.deleteWorldInfo(book) : !!(await apiPost('/api/worldinfo/delete', { name: book }))?.ok;
+    } catch (e) {
+        console.error('[重生成拼接] 删除世界书失败', e);
+    }
+    if (!ok) return toastr.error('没能删除');
+    await syncLists(true);
+    clearDraft();
+    toastr.success(`已删除「${book}」，可在回收站恢复`);
+    const next = await worldTarget();
+    if (next) showTarget(next);
+    else closePanel(true);
+}
 
 function wfindToggle() {
     if ($('#rs_panel .rs_wfind').length) return $('#rs_panel .rs_wfind').remove();
@@ -4516,6 +4546,14 @@ async function binRestore(x) {
         try { (await import('/scripts/personas.js')).getUserAvatars?.(true); } catch { }
         return true;
     }
+    if (x.type === 'book') {
+        const id = worldNames().includes(d.name) ? `${d.name} 恢复 ${humanStamp()}` : d.name;
+        await c.saveWorldInfo(id, structuredClone(d.data), true);
+        await syncLists(true);
+        if (!worldNames().includes(id)) return false;
+        if (id !== d.name) toastr.info(`原名已被占用，恢复成「${id}」`);
+        return true;
+    }
     if (x.type === 'chat') {
         const old = await chatGet(d);
         const id = Array.isArray(old) && old.length ? `${d.file_id} 恢复 ${humanStamp()}` : d.file_id;
@@ -5394,8 +5432,8 @@ function shelfHoldMove(e) {
 
 let listSyncAt = 0;
 
-async function syncLists() {
-    if (Date.now() - listSyncAt < 20000) return;
+async function syncLists(force) {
+    if (!force && Date.now() - listSyncAt < 20000) return;
     listSyncAt = Date.now();
     const wi = await pzWorldApi();
     await Promise.allSettled([ctx().getCharacters?.(), wi?.updateWorldInfoList?.()]);
@@ -5688,6 +5726,7 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_wi_toggle', toggleWorldEntry)
         .on('click', '#rs_panel .rs_wi_find', wfindToggle)
+        .on('click', '#rs_panel .rs_wi_delbook', wiDeleteBook)
         .on('input', '#rs_panel .rs_wfind_q', () => {
             clearTimeout(wfind.timer);
             wfind.timer = setTimeout(wfindRender, 150);

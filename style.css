@@ -301,7 +301,8 @@
     font-size: 14px;
 }
 
-#rs_panel .rs_pickers .rs_wi_find {
+#rs_panel .rs_pickers .rs_wi_find,
+#rs_panel .rs_pickers .rs_wi_delbook {
     flex: none;
     align-self: center;
 }
