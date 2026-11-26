@@ -1959,12 +1959,12 @@ function ensureShell() {
     </div>
     <div class="rs_set"></div>
     <div class="rs_shelf">
-      <div class="rs_bar"><span class="rs_icon rs_shelf_back fa-solid fa-chevron-left" title="返回"></span><div class="rs_bar_title rs_shelf_title"></div><div class="rs_bar_spacer"></div><span class="rs_icon rs_shelf_view fa-solid fa-list" title="切换网格/列表"></span><span class="rs_icon rs_shelf_selbtn fa-solid fa-check-double" title="多选"></span></div>
+      <div class="rs_bar"><span class="rs_icon rs_shelf_back fa-solid fa-chevron-left" title="返回"></span><div class="rs_bar_title rs_shelf_title"></div><div class="rs_bar_spacer"></div><span class="rs_icon rs_shelf_view fa-solid fa-list" title="切换网格/列表"></span><span class="rs_pz_card_btn rs_shelf_selbtn">选择</span></div>
       <div class="rs_shelf_tabs rs_rx_tabs"></div>
       <div class="rs_pz_filter"><input type="text" class="rs_shelf_q" placeholder="搜索名字"></div>
       <div class="rs_shelf_head"></div>
       <div class="rs_shelf_grid"></div>
-      <div class="rs_bar rs_shelf_bulk"><span class="rs_shelf_bcount"></span><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn" data-b="tags">标签</span><span class="rs_pz_card_btn" data-b="fav">收藏</span><span class="rs_pz_card_btn" data-b="unfav">取消收藏</span><span class="rs_pz_card_btn rs_pz_card_del" data-b="del">删除</span></div>
+      <div class="rs_bar rs_shelf_bulk"><span class="rs_pz_card_btn" data-b="all">全选</span><span class="rs_shelf_bcount"></span><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn" data-b="move">移动</span><span class="rs_pz_card_btn" data-b="dup">复制</span><span class="rs_pz_card_btn rs_pz_card_del" data-b="del">删除</span><span class="rs_pz_card_btn" data-b="more">更多</span></div>
       <div class="rs_shelf_sheet"></div>
     </div>
     <div class="rs_bin"></div>
@@ -4498,7 +4498,7 @@ const SHELF_RECENT = 30;
 const SHELF_STACK = 3;
 const SHELF_UNTAGGED = '@none';
 
-const shelf = { kind: 'char', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), act: null };
+const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null };
 
 function shelfThumb(kind, id) {
     const c = ctx();
@@ -4603,9 +4603,9 @@ async function shelfRender() {
     const tabs = SHELF_TABS[shelf.kind];
     if (!tabs.some(([t]) => t === shelf.tab)) shelf.tab = 'all';
     $('#rs_panel .rs_shelf_tabs').html(tabs.map(([t, n]) => `<span class="${shelf.tab === t ? 'rs_on' : ''}" data-t="${t}">${n}</span>`).join(''));
-    $('#rs_panel .rs_shelf_title').text(shelf.kind === 'char' ? '角色书架' : '人设书架');
+    $('#rs_panel .rs_shelf_title').text('书架');
     $('#rs_panel .rs_shelf_view').toggleClass('fa-list', shelf.view === 'grid').toggleClass('fa-table-cells-large', shelf.view === 'list');
-    $('#rs_panel .rs_shelf_selbtn').toggleClass('rs_on', shelf.selMode);
+    $('#rs_panel .rs_shelf_selbtn').toggleClass('rs_on', shelf.selMode).text(shelf.selMode ? '完成' : '选择');
     const labels = nameLabels(items, null);
     let html = '';
     let head = '';
@@ -4630,48 +4630,93 @@ async function shelfRender() {
 }
 
 async function shelfOpen(kind) {
+    if (shelf.kind !== kind) {
+        shelf.tab = 'all';
+        shelf.folder = null;
+        $('#rs_panel .rs_shelf_q').val('');
+    }
     shelf.kind = kind;
-    shelf.folder = null;
     shelf.sel.clear();
     shelf.selMode = false;
     shelfCloseSheet();
-    $('#rs_panel .rs_shelf_q').val('');
     $('#rs_panel').addClass('rs_shelf_on');
     await shelfRender();
 }
-
 function shelfClose() {
     shelfCloseSheet();
     $('#rs_panel').removeClass('rs_shelf_on');
 }
 
 function shelfCloseSheet() {
-    shelf.act = null;
     $('#rs_panel .rs_shelf_sheet').removeClass('rs_on').empty();
 }
 
-async function shelfSheet(id) {
-    const x = (await shelfItems()).find(y => y.id === id);
-    if (!x) return;
-    shelf.act = id;
+async function shelfMore() {
+    const items = (await shelfItems()).filter(y => shelf.sel.has(y.id));
+    if (!items.length) return toastr.info('先选几个');
     const ch = shelf.kind === 'char';
+    const one = items.length === 1 ? items[0] : null;
+    const allFav = items.every(x => x.fav);
     const btn = (a, t, cls = '') => `<div class="rs_shelf_act${cls}" data-a="${a}">${t}</div>`;
+    const top = one
+        ? `<img src="${escapeHtml(shelfThumb(shelf.kind, one.id))}" alt=""><div><b>${escapeHtml(one.name)}</b><div class="rs_pz_pv">${escapeHtml(shelfTagNames(one).join('、') || (ch ? '未分类' : '没有标题'))}</div></div>`
+        : `<div><b>已选 ${items.length} 个</b></div>`;
     $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
 <div class="rs_shelf_sheet_in">
-  <div class="rs_shelf_sheet_top"><img src="${escapeHtml(shelfThumb(shelf.kind, id))}" alt=""><div><b>${escapeHtml(x.name)}</b><div class="rs_pz_pv">${escapeHtml(shelfTagNames(x).join('、') || '未分类')}</div></div></div>
+  <div class="rs_shelf_sheet_top">${top}</div>
   <div class="rs_shelf_acts">
-    ${btn('edit', ch ? '编辑内容' : '编辑描述')}
-    ${ch ? btn('chat', '开始聊天') : btn('use', x.cur ? '已是当前人设' : '设为当前人设')}
-    ${btn('tags', ch ? '标签' : '标题')}
-    ${btn('fav', x.fav ? '取消收藏' : '收藏')}
-    ${btn('ren', '改名')}
-    ${btn('dup', '复制一份')}
-    ${btn('del', '删除', ' rs_shelf_danger')}
+    ${one ? (ch ? btn('chat', '开始聊天') : btn('use', one.cur ? '已是当前' : '设为当前')) : ''}
+    ${one ? btn('ren', '改名') : ''}
+    ${ch ? btn('tags', '加减标签') : ''}
+    ${btn('fav', allFav ? '取消收藏' : '收藏')}
     ${btn('close', '取消', ' rs_shelf_cancel')}
   </div>
 </div>`);
 }
 
+async function shelfMoveSheet() {
+    const items = (await shelfItems()).filter(y => shelf.sel.has(y.id));
+    if (!items.length) return toastr.info('先选几个');
+    const ch = shelf.kind === 'char';
+    const inTag = ch && shelf.tab === 'tag' && shelf.folder && shelf.folder !== SHELF_UNTAGGED ? shelf.folder : null;
+    const cur = inTag ? shelfTags().find(t => t.id === inTag)?.name : null;
+    const rows = shelfTags().filter(t => t.id !== inTag)
+        .map(t => `<div class="rs_shelf_act" data-move="${escapeHtml(t.id)}">${escapeHtml(t.name)}</div>`).join('');
+    const out = ch ? (inTag ? `移出「${escapeHtml(cur)}」` : '清空标签') : '清掉标题';
+    $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
+<div class="rs_shelf_sheet_in">
+  <div class="rs_shelf_sheet_top"><div><b>把 ${items.length} 个移到</b><div class="rs_pz_pv">${ch ? (inTag ? `会从「${escapeHtml(cur)}」移到选的标签，其他标签不动` : '会加上选的标签，原来的标签不动') : '会换成选的标题'}</div></div></div>
+  <div class="rs_shelf_acts">${rows}<div class="rs_shelf_act" data-move="">${out}</div></div>
+  <div class="rs_pz_filter"><input type="text" class="rs_shelf_newmove" placeholder="${ch ? '新标签' : '新标题'}，回车移过去"></div>
+  <div class="rs_shelf_acts"><div class="rs_shelf_act rs_shelf_cancel" data-a="close">取消</div></div>
+</div>`);
+    shelf.moveFrom = inTag;
+}
+
+async function shelfMoveTo(target) {
+    const ch = shelf.kind === 'char';
+    const from = shelf.moveFrom;
+    let id = target;
+    if (target && ch && !shelfTags().some(t => t.id === target)) {
+        const c = ctx();
+        const have = c.tags.find(t => t.name === target);
+        if (have) id = have.id;
+        else {
+            id = pzUid();
+            c.tags.push({ id, name: target, folder_type: 'NONE', filter_state: 'UNDEFINED', sort_order: c.tags.length, color: '', color2: '', create_date: Date.now() });
+        }
+    }
+    const items = (await shelfItems()).filter(y => shelf.sel.has(y.id));
+    for (const x of items) {
+        if (!ch) await shelfSaveTags(x.id, id ? [id] : []);
+        else if (!id) await shelfSaveTags(x.id, from ? x.tags.filter(t => t !== from) : []);
+        else await shelfSaveTags(x.id, [...new Set([...x.tags.filter(t => t !== from), id])]);
+    }
+    shelfCloseSheet();
+    shelf.sel.clear();
+    await shelfAfterTags();
+    toastr.success(`移好了 ${items.length} 个`);
+}
 async function shelfTagSheet(ids) {
     const items = (await shelfItems()).filter(x => ids.includes(x.id));
     if (!items.length) return;
@@ -4809,7 +4854,7 @@ async function shelfRename(id) {
     toastr.success('改好了');
 }
 
-async function shelfDuplicate(id) {
+async function shelfDuplicate(id, quiet) {
     const c = ctx();
     if (shelf.kind === 'char') {
         const res = await apiPost('/api/characters/duplicate', { avatar_url: id });
@@ -4818,7 +4863,8 @@ async function shelfDuplicate(id) {
         if (c.tagMap[id]) c.tagMap[data.path] = [...c.tagMap[id]];
         c.saveSettingsDebounced();
         await c.getCharacters();
-        return toastr.success('复制好了');
+        if (!quiet) toastr.success('复制好了');
+        return;
     }
     try {
         const blob = await (await fetch(`/User Avatars/${encodeURIComponent(id)}`)).blob();
@@ -4832,7 +4878,7 @@ async function shelfDuplicate(id) {
         pu.persona_descriptions = pu.persona_descriptions || {};
         if (pu.persona_descriptions[id]) pu.persona_descriptions[data.path] = structuredClone(pu.persona_descriptions[id]);
         await personaRefresh();
-        toastr.success('复制好了');
+        if (!quiet) toastr.success('复制好了');
     } catch (e) {
         console.error('[重生成拼接] 复制人设失败', e);
         toastr.error('复制失败');
@@ -4880,17 +4926,18 @@ async function shelfDelete(ids) {
     toastr[n === items.length ? 'success' : 'warning'](`删掉了 ${n} 个${n < items.length ? `，${items.length - n} 个没删成` : ''}`);
 }
 
+async function shelfEdit(id) {
+    shelfClose();
+    await switchTarget(() => (shelf.kind === 'char' ? charTarget('description', id) : personaTarget(id)));
+}
+
 async function shelfAct(a) {
-    const id = shelf.act;
+    const ids = [...shelf.sel];
+    const id = ids[0];
     const c = ctx();
-    if (a === 'close') {
+    if (a === 'close' || !id) {
         shelfCloseSheet();
         return shelfRender();
-    }
-    if (!id) return;
-    if (a === 'edit') {
-        shelfClose();
-        return switchTarget(() => (shelf.kind === 'char' ? charTarget('description', id) : personaTarget(id)));
     }
     if (a === 'chat') {
         const chid = c.characters.findIndex(x => x.avatar === id);
@@ -4905,26 +4952,34 @@ async function shelfAct(a) {
         } catch (e) {
             console.error('[重生成拼接] 切换人设失败', e);
         }
-        return shelfSheet(id).then(shelfRender);
+        shelfCloseSheet();
+        return shelfRender();
     }
-    if (a === 'tags') return shelfTagSheet([id]);
+    if (a === 'tags') return shelfTagSheet(ids);
     shelfCloseSheet();
-    if (a === 'fav') await shelfSetFav([id], !(await shelfItems()).find(x => x.id === id)?.fav);
+    if (a === 'fav') await shelfSetFav(ids, !(await shelfItems()).filter(x => shelf.sel.has(x.id)).every(x => x.fav));
     if (a === 'ren') await shelfRename(id);
-    if (a === 'dup') await shelfDuplicate(id);
-    if (a === 'del') await shelfDelete([id]);
     await shelfRender();
 }
-
 async function shelfBulk(a) {
     const ids = [...shelf.sel];
+    if (a === 'all') {
+        const all = (await shelfItems()).filter(x => $(`#rs_panel .rs_shelf_grid [data-id="${CSS.escape(x.id)}"]`).length);
+        const every = all.length && all.every(x => shelf.sel.has(x.id));
+        all.forEach(x => (every ? shelf.sel.delete(x.id) : shelf.sel.add(x.id)));
+        return shelfRender();
+    }
     if (!ids.length) return toastr.info('先选几个');
-    if (a === 'tags') return shelfTagSheet(ids);
-    if (a === 'fav' || a === 'unfav') await shelfSetFav(ids, a === 'fav');
+    if (a === 'move') return shelfMoveSheet();
+    if (a === 'more') return shelfMore();
+    if (a === 'dup') {
+        for (const id of ids) await shelfDuplicate(id, true);
+        toastr.success(`复制了 ${ids.length} 个`);
+        shelf.sel.clear();
+    }
     if (a === 'del') await shelfDelete(ids);
     await shelfRender();
 }
-
 async function shelfTap(el) {
     const folder = el.dataset.folder;
     if (folder) {
@@ -4932,13 +4987,10 @@ async function shelfTap(el) {
         return shelfRender();
     }
     const id = el.dataset.id;
-    if (shelf.selMode) {
-        flip(shelf.sel, id);
-        return shelfRender();
-    }
-    return shelfSheet(id);
+    if (!shelf.selMode) return shelfEdit(id);
+    flip(shelf.sel, id);
+    shelfRender();
 }
-
 const LOADERS = {
     msg: async () => {
         const id = lastAiIndex();
@@ -5022,7 +5074,9 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_shelf_head .rs_pz_card_btn', function () { shelfTagManage(this.dataset.a); })
         .on('click', '#rs_panel .rs_shelf_bulk [data-b]', function () { shelfBulk(this.dataset.b); })
-        .on('click', '#rs_panel .rs_shelf_act', function () { shelfAct(this.dataset.a); })
+        .on('click', '#rs_panel .rs_shelf_act[data-a]', function () { shelfAct(this.dataset.a); })
+        .on('click', '#rs_panel .rs_shelf_act[data-move]', function () { shelfMoveTo(this.dataset.move); })
+        .on('keydown', '#rs_panel .rs_shelf_newmove', function (e) { if (e.key === 'Enter' && this.value.trim()) shelfMoveTo(this.value.trim()); })
         .on('click', '#rs_panel .rs_shelf_sheet', function (e) {
             if (e.target === this) shelfAct('close');
         })
