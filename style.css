@@ -2260,3 +2260,7 @@
     -webkit-user-drag: none;
     pointer-events: none;
 }
+
+#rs_panel .rs_shelf_chat .rs_pz_pv + .rs_pz_pv {
+    opacity: 0.5;
+}

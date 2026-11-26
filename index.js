@@ -4500,7 +4500,7 @@ const SHELF_UNTAGGED = '@none';
 const SHELF_DOTS = '<span class="rs_shelf_dots" title="更多操作">···</span>';
 const SHELF_HOLD = 450;
 
-const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null, menuFolder: null };
+const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null, menuFolder: null, chatsOf: null, chats: null, menuChat: null };
 
 function shelfThumb(kind, id) {
     const c = ctx();
@@ -4600,7 +4600,120 @@ function shelfFolder(id, name, members) {
     return `<div class="rs_shelf_book rs_shelf_folder" data-folder="${escapeHtml(id)}"><div class="rs_shelf_img rs_shelf_stack">${covers || '<span class="rs_shelf_empty_cover fa-solid fa-tag"></span>'}<span class="rs_shelf_count">×${members.length}</span>${id === SHELF_UNTAGGED ? '' : SHELF_DOTS}</div><div class="rs_shelf_name rs_shelf_tab_label">${escapeHtml(name)}</div></div>`;
 }
 
+const CHAT_PREVIEW = 60;
+
+function chatTime(v) {
+    const t = typeof v === 'number' ? v : Date.parse(String(v || '').replace(/@(\d+)h(\d+)m(\d+)s(\d*)ms/, ' $1:$2:$3'));
+    if (!Number.isFinite(t) || !t) return '';
+    const d = new Date(t);
+    const z = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+
+async function shelfLoadChats() {
+    const res = await apiPost('/api/characters/chats', { avatar_url: shelf.chatsOf });
+    const data = res?.ok ? await res.json().catch(() => null) : null;
+    const list = Array.isArray(data) ? data : Object.values(data && !data.error ? data : {});
+    shelf.chats = list.filter(x => x?.file_name).map(x => ({ ...x, file_id: String(x.file_id ?? x.file_name).replace(/\.jsonl$/, '') }))
+        .sort((a, b) => (Date.parse(b.last_mes) || Number(b.last_mes) || 0) - (Date.parse(a.last_mes) || Number(a.last_mes) || 0));
+}
+
+async function shelfOpenChats(avatar) {
+    shelf.chatsOf = avatar;
+    shelf.chats = null;
+    shelf.selMode = false;
+    shelf.sel.clear();
+    shelfCloseSheet();
+    $('#rs_panel .rs_shelf_q').val('');
+    await shelfRender();
+    await shelfLoadChats();
+    await shelfRender();
+}
+
+function shelfChatsHtml() {
+    const c = ctx();
+    const ch = c.characters.find(x => x.avatar === shelf.chatsOf);
+    const curId = ch === currentChar() ? c.getCurrentChatId?.() : null;
+    const q = String($('#rs_panel .rs_shelf_q').val() || '').trim().toLowerCase();
+    $('#rs_panel .rs_shelf_head').html(`<div class="rs_shelf_crumb rs_shelf_chatcrumb"><span class="rs_icon rs_shelf_chatsback fa-solid fa-chevron-left"></span><b>${escapeHtml(ch?.name ?? '')} 的聊天</b><div class="rs_bar_spacer"></div><span class="rs_pz_pv">${shelf.chats ? `${shelf.chats.length} 个` : ''}</span></div>`);
+    if (!shelf.chats) return '<div class="rs_empty">正在读取……</div>';
+    const rows = shelf.chats.filter(x => !q || [x.file_id, x.mes].some(v => String(v || '').toLowerCase().includes(q)));
+    return rows.map(x => {
+        const tags = [x.file_id === curId && '正在打开', x.file_id === ch?.chat && x.file_id !== curId && '上次用的'].filter(Boolean).map(t => `<span class="rs_pz_tag rs_pz_same">${t}</span>`).join('');
+        const pv = [chatTime(x.last_mes), `${x.chat_items || 0} 条`, x.file_size].filter(Boolean).join(' · ');
+        return `<div class="rs_shelf_row rs_shelf_chat" data-chat="${escapeHtml(x.file_id)}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(x.file_id)}</span>${tags}</div><div class="rs_pz_pv">${escapeHtml(pv)}</div><div class="rs_pz_pv">${escapeHtml(String(x.mes || '').replace(/\s+/g, ' ').slice(0, CHAT_PREVIEW))}</div></div>${SHELF_DOTS}</div>`;
+    }).join('') || `<div class="rs_empty">${q ? '没有符合的聊天' : '还没有聊天'}</div>`;
+}
+
+function shelfChatMenu(fid) {
+    const x = shelf.chats?.find(y => y.file_id === fid);
+    if (!x) return;
+    shelf.menuChat = fid;
+    $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
+<div class="rs_shelf_sheet_in">
+  <div class="rs_shelf_sheet_top"><div><b>${escapeHtml(fid)}</b><div class="rs_pz_pv">${escapeHtml(chatTime(x.last_mes))} · ${x.chat_items || 0} 条</div></div></div>
+  <div class="rs_shelf_acts">
+    <div class="rs_shelf_act" data-c="open">打开</div>
+    <div class="rs_shelf_act" data-c="ren">改名</div>
+    <div class="rs_shelf_act rs_shelf_danger" data-c="del">删除</div>
+    <div class="rs_shelf_act rs_shelf_cancel" data-a="close">取消</div>
+  </div>
+</div>`);
+}
+
+async function shelfChatAct(a, fid) {
+    shelfCloseSheet();
+    const c = ctx();
+    const avatar = shelf.chatsOf;
+    const chid = c.characters.findIndex(x => x.avatar === avatar);
+    const ch = c.characters[chid];
+    if (!ch) return;
+    const isCurChar = ch === currentChar();
+    const isOpen = isCurChar && c.getCurrentChatId?.() === fid;
+    if (a === 'open') {
+        shelfClose();
+        await closePanel();
+        if (!isCurChar) await c.selectCharacterById(chid);
+        if (c.getCurrentChatId?.() !== fid) await c.openCharacterChat(fid);
+        return;
+    }
+    if (a === 'ren') {
+        const name = String(await pzAskText('聊天新名字', fid)).replace(/\.jsonl$/, '').trim();
+        if (!name || name === fid) return;
+        if (shelf.chats.some(x => x.file_id === name)) return toastr.warning('已经有同名的聊天了');
+        const res = await apiPost('/api/chats/rename', { is_group: false, avatar_url: avatar, original_file: `${fid}.jsonl`, renamed_file: `${name}.jsonl` });
+        const data = res?.ok ? await res.json().catch(() => ({})) : null;
+        if (!data || data.error) return toastr.error('改名失败');
+        const next = data.sanitizedFileName || name;
+        if (ch.chat === fid) {
+            ch.chat = next;
+            await postCharUpdate({ avatar, chat: next });
+            if (isCurChar) $('#selected_chat_pole').val(next);
+        }
+        if (isOpen) await c.reloadCurrentChat?.();
+        toastr.success('改好了');
+    }
+    if (a === 'del') {
+        if (isOpen) return toastr.warning('这个聊天正开着，先切到别的聊天再删');
+        if (!(await askConfirm(`删除聊天「${fid}」？可以在回收站找回`))) return;
+        const ok = await ccRemove({ file_id: fid, file_name: `${fid}.jsonl`, avatar, owner: ch.name });
+        if (!ok) return toastr.error('删除失败');
+        toastr.success('删掉了');
+    }
+    await shelfLoadChats();
+    await shelfRender();
+}
+
 async function shelfRender() {
+    if (shelf.chatsOf) {
+        $('#rs_panel .rs_shelf_grid').addClass('rs_shelf_list').html(shelfChatsHtml());
+        $('#rs_panel .rs_shelf_bulk').removeClass('rs_on');
+        $('#rs_panel .rs_shelf_tabs').hide();
+        $('#rs_panel .rs_shelf_q').attr('placeholder', '搜索聊天名或内容');
+        return;
+    }
+    $('#rs_panel .rs_shelf_tabs').show();
+    $('#rs_panel .rs_shelf_q').attr('placeholder', '搜索名字');
     const items = await shelfItems();
     const tabs = SHELF_TABS[shelf.kind];
     if (!tabs.some(([t]) => t === shelf.tab)) shelf.tab = 'all';
@@ -4631,6 +4744,7 @@ async function shelfRender() {
 }
 
 async function shelfOpen(kind) {
+    shelf.chatsOf = null;
     if (shelf.kind !== kind) {
         shelf.tab = 'all';
         shelf.folder = null;
@@ -4644,6 +4758,7 @@ async function shelfOpen(kind) {
     await shelfRender();
 }
 function shelfClose() {
+    shelf.chatsOf = null;
     shelfCloseSheet();
     $('#rs_panel').removeClass('rs_shelf_on');
 }
@@ -4668,6 +4783,7 @@ async function shelfMore(solo) {
   <div class="rs_shelf_acts">
     ${one ? btn('edit', '编辑') : ''}
     ${one ? (ch ? btn('chat', '开始聊天') : btn('use', one.cur ? '已是当前' : '设为当前')) : ''}
+    ${one && ch ? btn('chats', '聊天记录') : ''}
     ${btn('move', ch ? '移到标签' : '移到标题')}
     ${btn('dup', '复制一份')}
     ${btn('fav', allFav ? '取消收藏' : '收藏')}
@@ -4997,6 +5113,7 @@ async function shelfAct(a) {
     }
     if (a === 'edit') return shelfEdit(id);
     if (a === 'move') return shelfMoveSheet();
+    if (a === 'chats') return shelfOpenChats(id);
     if (a === 'tags') return shelfTagSheet(ids);
     if (a === 'multi') {
         shelf.selMode = true;
@@ -5074,6 +5191,7 @@ function shelfHoldMove(e) {
         return shelfRender();
     }
     const id = el.dataset.id;
+    if (!id) return;
     if (shelf.selMode) {
         flip(shelf.sel, id);
         return shelfRender();
@@ -5164,6 +5282,17 @@ function bindPanelEvents() {
         .on('pointermove', '#rs_panel .rs_shelf_grid', e => shelfHoldMove(e.originalEvent))
         .on('pointerup pointercancel', '#rs_panel .rs_shelf_grid', () => clearTimeout(shelfHold?.t))
         .on('contextmenu', '#rs_panel .rs_shelf_grid', e => e.preventDefault())
+        .on('click', '#rs_panel .rs_shelf_grid [data-chat]', function (e) {
+            const fid = this.dataset.chat;
+            if ($(e.target).closest('.rs_shelf_dots').length) shelfChatMenu(fid);
+            else shelfChatAct('open', fid);
+        })
+        .on('click', '#rs_panel .rs_shelf_act[data-c]', function () { shelfChatAct(this.dataset.c, shelf.menuChat); })
+        .on('click', '#rs_panel .rs_shelf_chatsback', async () => {
+            shelf.chatsOf = null;
+            $('#rs_panel .rs_shelf_q').val('');
+            await shelfRender();
+        })
         .on('click', '#rs_panel .rs_shelf_act[data-f]', function () {
             const f = shelf.menuFolder;
             shelfCloseSheet();
