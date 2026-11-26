@@ -3291,10 +3291,15 @@ const pzSrcOn = e => !pz.src?.v.startsWith('f:') && !!e.enabled;
 
 let pzWiApi;
 
-async function pzNewWorldEntry(data) {
+async function pzWorldApi() {
     if (pzWiApi === undefined) {
         try { pzWiApi = await import('/scripts/world-info.js'); } catch { pzWiApi = null; }
     }
+    return pzWiApi;
+}
+
+async function pzNewWorldEntry(data) {
+    await pzWorldApi();
     const made = pzWiApi?.createWorldInfoEntry?.(null, data);
     if (made) return made;
     const uids = Object.keys(data.entries).map(Number).filter(Number.isInteger);
@@ -5332,7 +5337,18 @@ function shelfHoldMove(e) {
     bin: async () => ({ kind: 'bin', subtitle: '删掉的东西先放这里', initial: '' }),
 };
 
+let listSyncAt = 0;
+
+async function syncLists() {
+    if (Date.now() - listSyncAt < 20000) return;
+    listSyncAt = Date.now();
+    const wi = await pzWorldApi();
+    await Promise.allSettled([ctx().getCharacters?.(), wi?.updateWorldInfoList?.()]);
+}
+
 async function openFromBall() {
+    if ($('#rs_overlay').length) return;
+    await syncLists();
     if ($('#rs_overlay').length) return;
     const first = settings().lastKind in LOADERS ? settings().lastKind : 'msg';
     const order = [first, ...Object.keys(LOADERS).filter(k => k !== first)];
