@@ -2002,8 +2002,8 @@
 
 #rs_panel .rs_shelf_cur {
     position: absolute;
-    right: 4px;
-    top: 4px;
+    left: 4px;
+    bottom: 4px;
     padding: 1px 6px;
     border-radius: 6px;
     font-size: 10px;
@@ -2220,4 +2220,43 @@
 
 #rs_panel .rs_shelf_selbtn.rs_on {
     border-color: var(--rs-accent);
+}
+
+#rs_panel .rs_shelf_dots {
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    z-index: 6;
+    min-width: 28px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    cursor: pointer;
+}
+
+#rs_panel .rs_shelf_stack .rs_shelf_dots {
+    right: auto;
+    left: 4px;
+}
+
+#rs_panel .rs_shelf_row .rs_shelf_dots,
+#rs_panel .rs_shelf_crumb .rs_shelf_dots {
+    position: static;
+    flex: none;
+    background: var(--rs-soft);
+    color: inherit;
+}
+
+#rs_panel .rs_shelf_grid img {
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
 }

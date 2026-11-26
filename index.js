@@ -1964,7 +1964,7 @@ function ensureShell() {
       <div class="rs_pz_filter"><input type="text" class="rs_shelf_q" placeholder="搜索名字"></div>
       <div class="rs_shelf_head"></div>
       <div class="rs_shelf_grid"></div>
-      <div class="rs_bar rs_shelf_bulk"><span class="rs_pz_card_btn" data-b="all">全选</span><span class="rs_shelf_bcount"></span><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn" data-b="move">移动</span><span class="rs_pz_card_btn" data-b="dup">复制</span><span class="rs_pz_card_btn rs_pz_card_del" data-b="del">删除</span><span class="rs_pz_card_btn" data-b="more">更多</span></div>
+      <div class="rs_bar rs_shelf_bulk"><span class="rs_pz_card_btn" data-b="all">全选</span><span class="rs_shelf_bcount"></span><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn" data-b="move">移动</span><span class="rs_pz_card_btn rs_pz_card_del" data-b="del">删除</span><span class="rs_pz_card_btn" data-b="more">更多</span></div>
       <div class="rs_shelf_sheet"></div>
     </div>
     <div class="rs_bin"></div>
@@ -4497,8 +4497,10 @@ const SHELF_TABS = { char: [['all', '全部'], ['tag', '标签'], ['fav', '收�
 const SHELF_RECENT = 30;
 const SHELF_STACK = 3;
 const SHELF_UNTAGGED = '@none';
+const SHELF_DOTS = '<span class="rs_shelf_dots" title="更多操作">···</span>';
+const SHELF_HOLD = 450;
 
-const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null };
+const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null, menuFolder: null };
 
 function shelfThumb(kind, id) {
     const c = ctx();
@@ -4583,9 +4585,9 @@ function shelfCover(x, labels) {
     const badge = `${x.fav ? '<span class="rs_shelf_fav fa-solid fa-star"></span>' : ''}${x.cur ? '<span class="rs_shelf_cur">当前</span>' : ''}`;
     const cb = shelf.selMode ? `<span class="rs_cb${sel ? ' rs_cb_on' : ''}"></span>` : '';
     if (shelf.view === 'list') {
-        return `<div class="rs_shelf_row${sel ? ' rs_pz_sel' : ''}" data-id="${escapeHtml(x.id)}">${cb}<img class="rs_shelf_avatar" loading="lazy" src="${escapeHtml(shelfThumb(shelf.kind, x.id))}" alt=""><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(label)}</span>${badge}</div><div class="rs_pz_pv">${escapeHtml(shelfTagNames(x).join('、') || '未分类')}</div></div></div>`;
+        return `<div class="rs_shelf_row${sel ? ' rs_pz_sel' : ''}" data-id="${escapeHtml(x.id)}">${cb}<img class="rs_shelf_avatar" loading="lazy" src="${escapeHtml(shelfThumb(shelf.kind, x.id))}" alt=""><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(label)}</span>${badge}</div><div class="rs_pz_pv">${escapeHtml(shelfTagNames(x).join('、') || '未分类')}</div></div>${SHELF_DOTS}</div>`;
     }
-    return `<div class="rs_shelf_book${sel ? ' rs_pz_sel' : ''}" data-id="${escapeHtml(x.id)}"><div class="rs_shelf_img"><img loading="lazy" src="${escapeHtml(shelfThumb(shelf.kind, x.id))}" alt="">${badge}${cb}</div><div class="rs_shelf_name">${escapeHtml(label)}</div></div>`;
+    return `<div class="rs_shelf_book${sel ? ' rs_pz_sel' : ''}" data-id="${escapeHtml(x.id)}"><div class="rs_shelf_img"><img loading="lazy" src="${escapeHtml(shelfThumb(shelf.kind, x.id))}" alt="">${badge}${cb}${shelf.selMode ? '' : SHELF_DOTS}</div><div class="rs_shelf_name">${escapeHtml(label)}</div></div>`;
 }
 
 function shelfTagNames(x) {
@@ -4595,7 +4597,7 @@ function shelfTagNames(x) {
 
 function shelfFolder(id, name, members) {
     const covers = members.slice(0, SHELF_STACK).map((x, i) => `<img loading="lazy" style="--i:${i}" src="${escapeHtml(shelfThumb(shelf.kind, x.id))}" alt="">`).reverse().join('');
-    return `<div class="rs_shelf_book rs_shelf_folder" data-folder="${escapeHtml(id)}"><div class="rs_shelf_img rs_shelf_stack">${covers || '<span class="rs_shelf_empty_cover fa-solid fa-tag"></span>'}<span class="rs_shelf_count">×${members.length}</span></div><div class="rs_shelf_name rs_shelf_tab_label">${escapeHtml(name)}</div></div>`;
+    return `<div class="rs_shelf_book rs_shelf_folder" data-folder="${escapeHtml(id)}"><div class="rs_shelf_img rs_shelf_stack">${covers || '<span class="rs_shelf_empty_cover fa-solid fa-tag"></span>'}<span class="rs_shelf_count">×${members.length}</span>${id === SHELF_UNTAGGED ? '' : SHELF_DOTS}</div><div class="rs_shelf_name rs_shelf_tab_label">${escapeHtml(name)}</div></div>`;
 }
 
 async function shelfRender() {
@@ -4618,8 +4620,7 @@ async function shelfRender() {
     } else {
         if (shelf.tab === 'tag' && shelf.folder) {
             const name = shelf.folder === SHELF_UNTAGGED ? (shelf.kind === 'char' ? '未分类' : '没有标题') : shelfTags().find(t => t.id === shelf.folder)?.name ?? '';
-            const manage = shelf.folder === SHELF_UNTAGGED ? '' : `<span class="rs_pz_card_btn" data-a="tagren">改名</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="tagdel">${shelf.kind === 'char' ? '删除标签' : '清掉标题'}</span>`;
-            head = `<div class="rs_shelf_crumb"><span class="rs_icon rs_shelf_up fa-solid fa-chevron-left"></span><b>${escapeHtml(name)}</b><div class="rs_bar_spacer"></div>${manage}</div>`;
+            head = `<div class="rs_shelf_crumb" data-folder="${escapeHtml(shelf.folder)}"><span class="rs_icon rs_shelf_up fa-solid fa-chevron-left"></span><b>${escapeHtml(name)}</b><div class="rs_bar_spacer"></div>${shelf.folder === SHELF_UNTAGGED ? '' : SHELF_DOTS}</div>`;
         }
         const list = shelfFilter(items);
         html = list.map(x => shelfCover(x, labels)).join('') || `<div class="rs_empty">${shelf.tab === 'fav' ? '还没有收藏' : shelf.tab === 'recent' ? '没有最近聊过的' : '没有符合的'}</div>`;
@@ -4651,7 +4652,7 @@ function shelfCloseSheet() {
     $('#rs_panel .rs_shelf_sheet').removeClass('rs_on').empty();
 }
 
-async function shelfMore() {
+async function shelfMore(solo) {
     const items = (await shelfItems()).filter(y => shelf.sel.has(y.id));
     if (!items.length) return toastr.info('先选几个');
     const ch = shelf.kind === 'char';
@@ -4665,15 +4666,35 @@ async function shelfMore() {
 <div class="rs_shelf_sheet_in">
   <div class="rs_shelf_sheet_top">${top}</div>
   <div class="rs_shelf_acts">
+    ${one ? btn('edit', '编辑') : ''}
     ${one ? (ch ? btn('chat', '开始聊天') : btn('use', one.cur ? '已是当前' : '设为当前')) : ''}
+    ${btn('move', ch ? '移到标签' : '移到标题')}
+    ${btn('dup', '复制一份')}
+    ${btn('fav', allFav ? '取消收藏' : '收藏')}
     ${one ? btn('ren', '改名') : ''}
     ${ch ? btn('tags', '加减标签') : ''}
-    ${btn('fav', allFav ? '取消收藏' : '收藏')}
+    ${solo ? btn('multi', '多选') : ''}
+    ${btn('del', '删除', ' rs_shelf_danger')}
     ${btn('close', '取消', ' rs_shelf_cancel')}
   </div>
 </div>`);
 }
 
+async function shelfFolderMenu(fid) {
+    const name = shelfTags().find(t => t.id === fid)?.name;
+    if (!name) return;
+    const ch = shelf.kind === 'char';
+    shelf.menuFolder = fid;
+    $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
+<div class="rs_shelf_sheet_in">
+  <div class="rs_shelf_sheet_top"><div><b>${escapeHtml(name)}</b><div class="rs_pz_pv">${ch ? '酒馆标签' : '用户设定标题'}</div></div></div>
+  <div class="rs_shelf_acts">
+    <div class="rs_shelf_act" data-f="tagren">改名</div>
+    <div class="rs_shelf_act rs_shelf_danger" data-f="tagdel">${ch ? '删除标签' : '清掉标题'}</div>
+    <div class="rs_shelf_act rs_shelf_cancel" data-a="close">取消</div>
+  </div>
+</div>`);
+}
 async function shelfMoveSheet() {
     const items = (await shelfItems()).filter(y => shelf.sel.has(y.id));
     if (!items.length) return toastr.info('先选几个');
@@ -4813,8 +4834,7 @@ async function shelfAfterTags() {
     await shelfRender();
 }
 
-async function shelfTagManage(a) {
-    const id = shelf.folder;
+async function shelfTagManage(a, id = shelf.folder) {
     if (!id || id === SHELF_UNTAGGED) return;
     const snap = await shelfSnap();
     const c = ctx();
@@ -4825,7 +4845,7 @@ async function shelfTagManage(a) {
         if (shelf.kind === 'char') c.tags.find(t => t.id === id).name = next;
         else {
             for (const x of (await shelfItems()).filter(y => y.tags.includes(id))) await personaSetTitle(x.id, next);
-            shelf.folder = next;
+            if (shelf.folder === id) shelf.folder = next;
         }
     } else {
         if (!(await askConfirm(shelf.kind === 'char' ? `删除标签「${name}」？只是去掉标签，角色本身不会删` : `清掉标题「${name}」？这些人设的标题会变成空的，人设本身不会删`))) return;
@@ -4835,7 +4855,7 @@ async function shelfTagManage(a) {
         } else {
             for (const x of (await shelfItems()).filter(y => y.tags.includes(id))) await personaSetTitle(x.id, '');
         }
-        shelf.folder = null;
+        if (shelf.folder === id) shelf.folder = null;
     }
     c.saveSettingsDebounced();
     await shelfAfterTags();
@@ -4967,7 +4987,19 @@ async function shelfAct(a) {
     const ids = [...shelf.sel];
     const id = ids[0];
     const c = ctx();
+    const done = () => {
+        if (!shelf.selMode) shelf.sel.clear();
+    };
     if (a === 'close' || !id) {
+        shelfCloseSheet();
+        done();
+        return shelfRender();
+    }
+    if (a === 'edit') return shelfEdit(id);
+    if (a === 'move') return shelfMoveSheet();
+    if (a === 'tags') return shelfTagSheet(ids);
+    if (a === 'multi') {
+        shelf.selMode = true;
         shelfCloseSheet();
         return shelfRender();
     }
@@ -4978,52 +5010,80 @@ async function shelfAct(a) {
         await closePanel();
         return c.selectCharacterById(chid);
     }
+    shelfCloseSheet();
     if (a === 'use') {
         try {
             await (await import('/scripts/personas.js')).setUserAvatar?.(id);
         } catch (e) {
             console.error('[重生成拼接] 切换人设失败', e);
         }
-        shelfCloseSheet();
-        return shelfRender();
     }
-    if (a === 'tags') return shelfTagSheet(ids);
-    shelfCloseSheet();
     if (a === 'fav') await shelfSetFav(ids, !(await shelfItems()).filter(x => shelf.sel.has(x.id)).every(x => x.fav));
     if (a === 'ren') await shelfRename(id);
+    if (a === 'dup') {
+        for (const x of ids) await shelfDuplicate(x, ids.length > 1);
+        if (ids.length > 1) toastr.success(`复制了 ${ids.length} 个`);
+        shelf.sel.clear();
+    }
+    if (a === 'del') await shelfDelete(ids);
+    done();
     await shelfRender();
-}
-async function shelfBulk(a) {
-    const ids = [...shelf.sel];
+}async function shelfBulk(a) {
     if (a === 'all') {
         const all = (await shelfItems()).filter(x => $(`#rs_panel .rs_shelf_grid [data-id="${CSS.escape(x.id)}"]`).length);
         const every = all.length && all.every(x => shelf.sel.has(x.id));
         all.forEach(x => (every ? shelf.sel.delete(x.id) : shelf.sel.add(x.id)));
         return shelfRender();
     }
-    if (!ids.length) return toastr.info('先选几个');
-    if (a === 'move') return shelfMoveSheet();
-    if (a === 'more') return shelfMore();
-    if (a === 'dup') {
-        for (const id of ids) await shelfDuplicate(id, true);
-        toastr.success(`复制了 ${ids.length} 个`);
-        shelf.sel.clear();
-    }
-    if (a === 'del') await shelfDelete(ids);
-    await shelfRender();
+    if (!shelf.sel.size) return toastr.info('先选几个');
+    if (a === 'more') return shelfMore(false);
+    return shelfAct(a);
 }
-async function shelfTap(el) {
+
+let shelfHold = null;
+
+function shelfHoldStart(el, e) {
+    clearTimeout(shelfHold?.t);
+    shelfHold = {
+        x: e.clientX,
+        y: e.clientY,
+        fired: false,
+        t: setTimeout(() => {
+            shelfHold.fired = true;
+            shelf.selMode = true;
+            shelf.sel.add(el.dataset.id);
+            shelfRender();
+        }, SHELF_HOLD),
+    };
+}
+
+function shelfHoldMove(e) {
+    if (shelfHold && Math.hypot(e.clientX - shelfHold.x, e.clientY - shelfHold.y) > 10) clearTimeout(shelfHold.t);
+}async function shelfTap(el, target) {
+    if (shelfHold?.fired) {
+        shelfHold = null;
+        return;
+    }
+    clearTimeout(shelfHold?.t);
     const folder = el.dataset.folder;
+    const dots = target.closest('.rs_shelf_dots');
     if (folder) {
+        if (dots) return shelfFolderMenu(folder);
+        if (el.classList.contains('rs_shelf_crumb')) return;
         shelf.folder = folder;
         return shelfRender();
     }
     const id = el.dataset.id;
-    if (!shelf.selMode) return shelfEdit(id);
-    flip(shelf.sel, id);
-    shelfRender();
-}
-const LOADERS = {
+    if (shelf.selMode) {
+        flip(shelf.sel, id);
+        return shelfRender();
+    }
+    if (dots) {
+        shelf.sel = new Set([id]);
+        return shelfMore(true);
+    }
+    return shelfEdit(id);
+}const LOADERS = {
     msg: async () => {
         const id = lastAiIndex();
         if (id < 0) {
@@ -5099,12 +5159,20 @@ function bindPanelEvents() {
             shelf.sel.clear();
             shelfRender();
         })
-        .on('click', '#rs_panel .rs_shelf_grid [data-id], #rs_panel .rs_shelf_grid [data-folder]', function () { shelfTap(this); })
+        .on('click', '#rs_panel .rs_shelf_grid [data-id], #rs_panel .rs_shelf_grid [data-folder], #rs_panel .rs_shelf_crumb', function (e) { shelfTap(this, e.target); })
+        .on('pointerdown', '#rs_panel .rs_shelf_grid [data-id]', function (e) { if (!$(e.target).closest('.rs_shelf_dots').length) shelfHoldStart(this, e.originalEvent); })
+        .on('pointermove', '#rs_panel .rs_shelf_grid', e => shelfHoldMove(e.originalEvent))
+        .on('pointerup pointercancel', '#rs_panel .rs_shelf_grid', () => clearTimeout(shelfHold?.t))
+        .on('contextmenu', '#rs_panel .rs_shelf_grid', e => e.preventDefault())
+        .on('click', '#rs_panel .rs_shelf_act[data-f]', function () {
+            const f = shelf.menuFolder;
+            shelfCloseSheet();
+            shelfTagManage(this.dataset.f, f);
+        })
         .on('click', '#rs_panel .rs_shelf_up', () => {
             shelf.folder = null;
             shelfRender();
         })
-        .on('click', '#rs_panel .rs_shelf_head .rs_pz_card_btn', function () { shelfTagManage(this.dataset.a); })
         .on('click', '#rs_panel .rs_shelf_bulk [data-b]', function () { shelfBulk(this.dataset.b); })
         .on('click', '#rs_panel .rs_shelf_act[data-a]', function () { shelfAct(this.dataset.a); })
         .on('click', '#rs_panel .rs_shelf_act[data-move]', function () { shelfMoveTo(this.dataset.move); })
