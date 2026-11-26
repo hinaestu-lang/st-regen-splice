@@ -1147,7 +1147,7 @@ async function worldTarget(book, uid) {
     if (!entries.length) {
         return {
             kind: 'world',
-            pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>`,
+            pickers: `${WI_FIND}<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>`,
             refs: [{ label: '打开时', text: '' }], ref: 0, initial: '', empty: '这本世界书还没有条目',
             saveLabel: '保存', closeAfterSave: false, save: async () => false,
         };
@@ -1162,7 +1162,7 @@ async function worldTarget(book, uid) {
 
     return savedTarget(key, initial, {
         kind: 'world',
-        pickers: `<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
+        pickers: `${WI_FIND}<select class="rs_pick text_pole" data-pick="book">${bookOpts}</select>
 <select class="rs_pick text_pole" data-pick="entry">${entryOpts}</select>
 ${wiToggleHtml(!entry.disable)}`,
         book,
@@ -1181,6 +1181,60 @@ ${wiToggleHtml(!entry.disable)}`,
             return true;
         },
     });
+}
+
+const WI_FIND = '<span class="rs_icon rs_wi_find fa-solid fa-magnifying-glass" title="搜索世界书"></span>';
+
+const wfind = { all: false, seq: 0, timer: 0 };
+
+function wfindToggle() {
+    if ($('#rs_panel .rs_wfind').length) return $('#rs_panel .rs_wfind').remove();
+    $('#rs_panel .rs_pickers').after(`<div class="rs_wfind">
+  <div class="rs_pz_filter"><input type="text" class="rs_wfind_q" placeholder="搜条目名、关键词、内容"><span class="rs_chip rs_wfind_all ${wfind.all ? 'rs_on' : ''}">全部世界书</span></div>
+  <div class="rs_wfind_list"></div>
+</div>`);
+    wfindRender();
+    $('#rs_panel .rs_wfind_q').trigger('focus');
+}
+
+function wfindSnip(text, q) {
+    const t = String(text || '').replace(/\s+/g, ' ');
+    const i = q ? t.toLowerCase().indexOf(q) : -1;
+    return i < 0 ? t.slice(0, 60) : (i > 15 ? '…' : '') + t.slice(Math.max(0, i - 15), i + 45);
+}
+
+async function wfindRender() {
+    const seq = ++wfind.seq;
+    const q = String($('#rs_panel .rs_wfind_q').val() || '').trim().toLowerCase();
+    const cur = state.target?.book;
+    const books = wfind.all ? worldNames() : cur ? [cur] : [];
+    const rows = [];
+    if (wfind.all && q) {
+        for (const b of books) if (b.toLowerCase().includes(q)) rows.push({ book: b, name: b, pv: '世界书', isBook: true });
+    }
+    for (const b of books) {
+        const data = await ctx().loadWorldInfo(b);
+        if (seq !== wfind.seq) return;
+        const entries = Object.values(data?.entries || {}).sort((a, c) => (a.displayIndex ?? a.uid) - (c.displayIndex ?? c.uid));
+        for (const e of entries) {
+            const name = e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid}`;
+            const keys = [...(e.key || []), ...(e.keysecondary || [])].join(' ');
+            if (q && ![name, keys, e.content].some(x => String(x || '').toLowerCase().includes(q))) continue;
+            const hitContent = q && !name.toLowerCase().includes(q) && !keys.toLowerCase().includes(q);
+            rows.push({ book: b, uid: e.uid, name, off: e.disable, pv: (wfind.all ? b + ' · ' : '') + wfindSnip(e.content, hitContent ? q : '') });
+        }
+    }
+    const shown = rows.slice(0, 200);
+    const here = state.target?.uid;
+    $('#rs_panel .rs_wfind_list').html(shown.length ? shown.map(r => `<div class="rs_pz_row rs_wfind_row ${!r.isBook && r.book === cur && String(r.uid) === String(here) ? 'rs_pz_sel' : ''}" data-book="${escapeHtml(r.book)}" ${r.isBook ? '' : `data-uid="${r.uid}"`}>
+  <div class="rs_wfind_main"><div class="rs_pz_nm">${r.isBook ? '<i class="fa-solid fa-book"></i> ' : ''}${escapeHtml(r.name)}${r.off ? '<span class="rs_pz_tag">禁用</span>' : ''}</div><div class="rs_pz_pv">${escapeHtml(r.pv)}</div></div>
+</div>`).join('') + (rows.length > shown.length ? `<div class="rs_wfind_more">还有 ${rows.length - shown.length} 条，再多打几个字</div>` : '') : '<div class="rs_wfind_more">没找到</div>');
+}
+
+async function wfindGo(el) {
+    const book = el.dataset.book;
+    const uid = el.dataset.uid;
+    if (await switchTarget(() => worldTarget(book, uid))) $('#rs_panel .rs_wfind').remove();
 }
 
 function wiToggleHtml(on) {
@@ -2071,6 +2125,7 @@ function showTarget(t) {
         settings().lastKind = t.kind;
         ctx().saveSettingsDebounced();
     }
+    $('#rs_panel .rs_wfind').remove();
     $('#rs_panel .rs_pickers').html(t.pickers).toggle(!!t.pickers);
     fillRefSelect(t.ref);
     $('#rs_panel .rs_save').text(t.saveLabel);
@@ -5632,6 +5687,17 @@ function bindPanelEvents() {
             if (!ok && prev !== undefined) $(this).val(prev);
         })
         .on('click', '#rs_panel .rs_wi_toggle', toggleWorldEntry)
+        .on('click', '#rs_panel .rs_wi_find', wfindToggle)
+        .on('input', '#rs_panel .rs_wfind_q', () => {
+            clearTimeout(wfind.timer);
+            wfind.timer = setTimeout(wfindRender, 150);
+        })
+        .on('click', '#rs_panel .rs_wfind_all', function () {
+            wfind.all = !wfind.all;
+            $(this).toggleClass('rs_on', wfind.all);
+            wfindRender();
+        })
+        .on('click', '#rs_panel .rs_wfind_row', function () { wfindGo(this); })
         .on('click', '#rs_panel .rs_ver_add', saveAsVersion)
         .on('click', '#rs_panel .rs_ver_del', deleteVersion)
         .on('click', '#rs_panel .rs_snap_clear', clearSnaps)

@@ -301,6 +301,45 @@
     font-size: 14px;
 }
 
+#rs_panel .rs_pickers .rs_wi_find {
+    flex: none;
+    align-self: center;
+}
+
+#rs_panel .rs_wfind {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    max-height: 55%;
+    border-bottom: 1px solid var(--rs-line);
+    background: var(--rs-soft);
+}
+
+#rs_panel .rs_wfind_all {
+    flex: none;
+}
+
+#rs_panel .rs_wfind_list {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+#rs_panel .rs_wfind_main {
+    flex: 1;
+    min-width: 0;
+}
+
+#rs_panel .rs_wfind_row.rs_pz_sel {
+    background: color-mix(in srgb, var(--rs-accent) 14%, transparent);
+}
+
+#rs_panel .rs_wfind_more {
+    padding: 12px;
+    text-align: center;
+    font-size: 13px;
+    opacity: 0.5;
+}
+
 #rs_panel .rs_wi_toggle {
     flex: none;
     display: flex;
