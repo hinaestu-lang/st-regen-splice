@@ -183,7 +183,6 @@
     margin-bottom: 6px;
 }
 
-
 #rs_panel .rs_lib_list {
     max-height: 32dvh;
     overflow-y: auto;
@@ -219,7 +218,6 @@
     font-size: 11px;
     opacity: 0.5;
 }
-
 
 #rs_panel .rs_find_row {
     display: flex;
@@ -816,6 +814,7 @@
     flex: 1;
     min-height: 0;
     flex-direction: column;
+    position: relative;
 }
 
 #rs_panel.rs_mode_preset .rs_pz {
@@ -914,6 +913,8 @@
 
 #rs_panel .rs_pz_row.rs_pz_div {
     background: var(--rs-soft);
+    border-left: 3px solid var(--rs-accent);
+    padding-left: 9px;
 }
 
 #rs_panel .rs_pz_row.rs_pz_off .rs_pz_main {
@@ -1170,6 +1171,7 @@
     flex: 1;
     min-height: 0;
     flex-direction: column;
+    position: relative;
 }
 
 #rs_panel.rs_mode_regex .rs_rx {
@@ -1377,7 +1379,11 @@
     border: 1px solid var(--rs-line) !important;
     background: var(--SmartThemeBlurTintColor) !important;
     color: var(--SmartThemeBodyColor) !important;
-    font-size: 14px;
+    font-size: var(--rs-font, 15px);
+    min-height: 160px;
+    line-height: 1.65;
+    resize: none;
+    overflow-y: auto;
 }
 
 #rs_panel .rs_pz_card_row select {
@@ -1387,18 +1393,12 @@
     font-size: 13px;
 }
 
-#rs_panel .rs_pz_card .rs_pz_ct {
-    min-height: 160px;
-    font-size: var(--rs-font, 15px);
-    line-height: 1.65;
-    resize: none;
-    overflow-y: auto;
-}
-
 #rs_panel .rs_pz_card_foot {
     display: flex;
     align-items: center;
     gap: 8px;
+    position: relative;
+    min-height: 26px;
 }
 
 #rs_panel .rs_pz_card_note {
@@ -1416,10 +1416,6 @@
 
 #rs_panel .rs_pz_card_del {
     color: #d9534f;
-}
-
-#rs_panel .rs_pz {
-    position: relative;
 }
 
 #rs_panel .rs_pz_pick,
@@ -1633,10 +1629,6 @@
     color: #d9534f;
 }
 
-#rs_panel .rs_rx {
-    position: relative;
-}
-
 #rs_panel .rs_rx.rs_rx_picking .rs_rx_pick {
     display: flex;
 }
@@ -1762,18 +1754,8 @@
     font-size: 12px;
 }
 
-#rs_panel .rs_pz_row.rs_pz_div {
-    border-left: 3px solid var(--rs-accent);
-    padding-left: 9px;
-}
-
 #rs_panel .rs_pz_div .rs_pz_nm {
     color: var(--rs-accent);
-}
-
-#rs_panel .rs_pz_card_foot {
-    position: relative;
-    min-height: 26px;
 }
 
 #rs_panel .rs_pz_card_same {

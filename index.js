@@ -458,12 +458,25 @@ function saveBranchCache() {
 let branchInfo = null;
 let branchLoading = null;
 
+async function apiPost(url, body) {
+    try {
+        return await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body) });
+    } catch (e) {
+        console.error('[重生成拼接] 请求失败', url, e);
+        return null;
+    }
+}
+
 async function postJson(url, body) {
-    const res = await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(`${url} ${res.status}`);
+    const res = await apiPost(url, body);
+    if (!res?.ok) throw new Error(`${url} ${res?.status}`);
     return res.json();
 }
 
+function flip(set, k) {
+    if (set.has(k)) set.delete(k);
+    else set.add(k);
+}
 async function chatMain(ch, file) {
     if (branchMainCache.has(file)) return branchMainCache.get(file);
     let main = null;
@@ -928,15 +941,10 @@ function currentChar() {
 const ALT_PREVIEW = 14;
 
 async function postCharUpdate(body) {
-    const res = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: ctx().getRequestHeaders(),
-        body: JSON.stringify(body),
-    });
-    if (!res.ok) toastr.error('保存角色卡失败');
-    return res.ok;
+    const res = await apiPost('/api/characters/merge-attributes', body);
+    if (!res?.ok) toastr.error('保存角色卡失败');
+    return !!res?.ok;
 }
-
 async function savedTarget(key, initial, rest) {
     return { refs: await buildRefs(key, initial), key, ref: 0, initial, saveLabel: '保存', closeAfterSave: false, ...rest };
 }
@@ -965,8 +973,8 @@ async function fullChar(ch) {
     try {
         if (typeof c.unshallowCharacter === 'function') await c.unshallowCharacter(chid);
         else {
-            const res = await fetch('/api/characters/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ avatar_url: ch.avatar }) });
-            if (res.ok) {
+            const res = await apiPost('/api/characters/get', { avatar_url: ch.avatar });
+            if (res?.ok) {
                 Object.assign(ch, await res.json());
                 delete ch.shallow;
             }
@@ -2466,7 +2474,7 @@ const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
-const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, tokOn: false, tokCache: new Map(), sch: false, unfold: new Set(), pos: 'end', picking: false, editing: null };
+const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, tokOn: false, tokSort: false, tokCache: new Map(), sch: false, cmpTimer: 0, unfold: new Set(), pos: 'end', picking: false, editing: null };
 
 const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
 const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -2976,11 +2984,7 @@ function pzRender() {
     pzButtons();
     $('#rs_panel .rs_pz_pos').text(pzPosLabel());
     $('#rs_panel .rs_pz_schbtn').toggle(!pzIsWorld());
-    $('#rs_panel .rs_pz_tokbtn').toggleClass('rs_on', pz.tokOn);
-    $('#rs_panel .rs_pz_tokbar').toggleClass('rs_on', pz.tokOn);
-    $('#rs_panel .rs_pz_tokopts').toggleClass('rs_on', pz.tokOn);
-    $('#rs_panel .rs_pz_toksort').toggleClass('rs_on', !!pz.tokSort);
-    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokOn && !!pz.tokSort);
+    pzTokUi();
     if (pz.tokOn) pzRefreshTok();
     if (pz.sch) pzRenderSch();
     if (pz.picking) pzRenderPick();
@@ -3029,8 +3033,7 @@ function pzPickTap(item, onFold) {
 
 function pzToggleFold(side, key) {
     const k = side + key;
-    if (pz.unfold.has(k)) pz.unfold.delete(k);
-    else pz.unfold.add(k);
+    flip(pz.unfold, k);
 }
 
 function pzFoldAll(side) {
@@ -3071,8 +3074,7 @@ function pzTapItem(item, target) {
         return pzFitCards();
     }
     const ok = side + key;
-    if (pz.open.has(ok)) pz.open.delete(ok);
-    else pz.open.add(ok);
+    flip(pz.open, ok);
     pzRefreshItem(side, key);
 }
 
@@ -3442,27 +3444,34 @@ async function pzRefreshTok() {
     $('#rs_panel .rs_pz_tokbar').text(pzTokSummary());
 }
 
+function pzTokUi() {
+    $('#rs_panel .rs_pz_tokbtn, #rs_panel .rs_pz_tokbar, #rs_panel .rs_pz_tokopts').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_toksort').toggleClass('rs_on', pz.tokSort);
+    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokOn && pz.tokSort);
+}
+
 async function pzToggleTok() {
     pz.tokOn = !pz.tokOn;
-    $('#rs_panel .rs_pz_tokbtn').toggleClass('rs_on', pz.tokOn);
-    $('#rs_panel .rs_pz_tokbar').toggleClass('rs_on', pz.tokOn).text('正在统计 token……');
-    $('#rs_panel .rs_pz_tokopts').toggleClass('rs_on', pz.tokOn);
-    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokOn && !!pz.tokSort);
+    pzTokUi();
+    $('#rs_panel .rs_pz_tokbar').text('正在统计 token……');
     pzRenderList('tgt');
     pzFitCards();
     await pzRefreshTok();
-}async function pzWrite(pm, name, preset) {
-    const res = await fetch('/api/presets/save', {
-        method: 'POST',
-        headers: ctx().getRequestHeaders(),
-        body: JSON.stringify({ apiId: 'openai', name, preset }),
-    });
-    if (!res.ok) {
+}
+
+async function presetSave(pm, name, preset) {
+    const res = await apiPost('/api/presets/save', { apiId: 'openai', name, preset });
+    if (!res?.ok) {
         toastr.error('保存预设失败');
         return false;
     }
     const st = pzStored(pm, name);
     if (st) pm.getPresetList().presets[st.idx] = preset;
+    return true;
+}
+
+async function pzWrite(pm, name, preset) {
+    if (!(await presetSave(pm, name, preset))) return false;
     if (name === pm.getSelectedPresetName()) {
         const live = await pzLive(pm);
         if (live) {
@@ -3835,8 +3844,7 @@ function rxRenderPick() {
 function rxPickTap(item) {
     const g = item.dataset.g;
     if (g) {
-        if (rx.unfold.has(g)) rx.unfold.delete(g);
-        else rx.unfold.add(g);
+        flip(rx.unfold, g);
         return rxRenderPick();
     }
     const v = item.dataset.v;
@@ -3915,8 +3923,7 @@ function rxRenderAct() {
 }
 
 function rxToggleSel(id) {
-    if (rx.sel.has(id)) rx.sel.delete(id);
-    else rx.sel.add(id);
+    flip(rx.sel, id);
     $(`#rs_panel .rs_rx_list .rs_pz_row[data-k="${CSS.escape(id)}"]`).toggleClass('rs_pz_sel', rx.sel.has(id));
     rxRenderAct();
 }
@@ -4061,16 +4068,7 @@ async function rxPresetWrite(name, list) {
     }
     const preset = structuredClone(st.preset);
     preset.extensions = { ...(preset.extensions || {}), regex_scripts: list };
-    const res = await fetch('/api/presets/save', {
-        method: 'POST',
-        headers: c.getRequestHeaders(),
-        body: JSON.stringify({ apiId: 'openai', name, preset }),
-    });
-    if (!res.ok) {
-        toastr.error('保存预设正则失败');
-        return false;
-    }
-    pm.getPresetList().presets[st.idx] = preset;
+    if (!(await presetSave(pm, name, preset))) return false;
     if (name === pm.getSelectedPresetName()) {
         const live = await pzLive(pm);
         if (live) live.extensions = { ...(live.extensions || {}), regex_scripts: list };
@@ -4397,18 +4395,13 @@ async function binRestore(x) {
         return true;
     }
     if (x.type === 'chat') {
-        const g = !!d.group;
-        const got = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: d.file_id } : { ch_name: d.owner, file_name: d.file_id, avatar_url: d.avatar });
-        const old = got?.ok ? await got.json().catch(() => null) : null;
+        const old = await chatGet(d);
         const id = Array.isArray(old) && old.length ? `${d.file_id} 恢复 ${humanStamp()}` : d.file_id;
-        const res = await ccPost(g ? '/api/chats/group/save' : '/api/chats/save', g
-            ? { id, chat: d.chat, force: true }
-            : { ch_name: d.owner, file_name: id, avatar_url: d.avatar, chat: d.chat, force: true });
-        if (!res?.ok) return false;
-        const gr = g && (c.groups || []).find(y => y.id === d.group);
+        if (!(await chatApi('save', { ...d, file_id: id }, d.chat))?.ok) return false;
+        const gr = d.group && (c.groups || []).find(y => y.id === d.group);
         if (gr && Array.isArray(gr.chats) && !gr.chats.includes(id)) {
             gr.chats.push(id);
-            await ccPost('/api/groups/edit', gr);
+            await apiPost('/api/groups/edit', gr);
         }
         if (id !== d.file_id) toastr.info(`原名已被占用，恢复成「${id}」`);
         return true;
@@ -4512,8 +4505,7 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_pz_toksort', function () {
             pz.tokSort = !pz.tokSort;
-            $(this).toggleClass('rs_on', pz.tokSort);
-            $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokSort);
+            pzTokUi();
             pzRenderList('tgt');
             pzFitCards();
         })
@@ -4958,8 +4950,8 @@ async function ccLoad() {
     if (!kept) $('#rs_panel .rs_cc').html('<div class="rs_empty">正在读取……</div>');
     let data = [];
     try {
-        const res = await fetch('/api/chats/recent', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ max: 100000 }) });
-        if (!res.ok) throw new Error(String(res.status));
+        const res = await apiPost('/api/chats/recent', { max: 100000 });
+        if (!res?.ok) throw new Error(String(res?.status));
         data = await res.json();
     } catch (e) {
         console.error('[重生成拼接] 读取聊天文件失败', e);
@@ -5043,37 +5035,33 @@ function ccToggleGroup(g) {
     items.forEach(x => (all ? cc.sel.delete(x.key) : cc.sel.add(x.key)));
 }
 
-async function ccPost(url, body) {
-    try {
-        return await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body) });
-    } catch (e) {
-        console.error('[重生成拼接] 请求失败', url, e);
-        return null;
-    }
+
+function chatApi(op, x, chat) {
+    const g = !!x.group;
+    const url = `/api/chats/${g ? 'group/' : ''}${op}`;
+    if (g) return apiPost(url, op === 'save' ? { id: x.file_id, chat, force: true } : { id: x.file_id });
+    if (op === 'delete') return apiPost(url, { chatfile: `${x.file_id}.jsonl`, avatar_url: x.avatar });
+    return apiPost(url, { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar, ...(op === 'save' ? { chat, force: true } : {}) });
+}
+
+async function chatGet(x) {
+    const r = await chatApi('get', x);
+    return r?.ok ? await r.json().catch(() => null) : null;
 }
 
 async function ccRemove(x) {
-    const g = !!x.group;
-    const getIt = async () => {
-        const r = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: x.file_id } : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar });
-        return r?.ok ? await r.json().catch(() => null) : null;
-    };
-    const body = await getIt();
+    const body = await chatGet(x);
     if (Array.isArray(body) && body.length > 1) {
-        await binAdd({ type: 'chat', label: x.file_name.replace(/\.jsonl$/, ''), sub: `${x.owner} · ${body.length - 1} 条`, data: { group: x.group || null, avatar: x.avatar || null, owner: x.owner, file_id: x.file_id, chat: body } });
+        await binAdd({ type: 'chat', label: x.file_id, sub: `${x.owner} · ${body.length - 1} 条`, data: { group: x.group || null, avatar: x.avatar || null, owner: x.owner, file_id: x.file_id, chat: body } });
     }
-    const del = () => ccPost(g ? '/api/chats/group/delete' : '/api/chats/delete', g ? { id: x.file_id } : { chatfile: x.file_name, avatar_url: x.avatar });
-    const first = await del();
+    const first = await chatApi('delete', x);
     if (first?.ok) return true;
     const why = first ? await first.text().catch(() => '') : '';
     if (first?.status !== 404 && !/not\s*found/i.test(why)) return false;
     if (Array.isArray(body) && body.length) return false;
     const stub = [{ user_name: 'User', character_name: x.owner, create_date: Date.now(), chat_metadata: {} }];
-    const saved = await ccPost(g ? '/api/chats/group/save' : '/api/chats/save', g
-        ? { id: x.file_id, chat: stub, force: true }
-        : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar, chat: stub, force: true });
-    if (!saved?.ok) return false;
-    return !!(await del())?.ok;
+    if (!(await chatApi('save', x, stub))?.ok) return false;
+    return !!(await chatApi('delete', x))?.ok;
 }
 
 async function ccDelete() {
@@ -5239,14 +5227,12 @@ function renderSettings() {
     $('#rs_panel .rs_cc_load').on('click', ccLoad);
     $('#rs_panel .rs_cc').on('click', '.rs_cc_row', function () {
         const k = this.dataset.k;
-        if (cc.sel.has(k)) cc.sel.delete(k);
-        else cc.sel.add(k);
+        flip(cc.sel, k);
         ccRenderList();
     }).on('click', '.rs_cc_head', function (e) {
         const g = this.dataset.g;
         if ($(e.target).closest('.rs_cb_hit').length) ccToggleGroup(g);
-        else if (cc.open.has(g)) cc.open.delete(g);
-        else cc.open.add(g);
+        else flip(cc.open, g);
         ccRenderList();
     }).on('input', '.rs_cc_q', ccRenderList).on('click', '.rs_cc_bad', () => {
         cc.badOnly = !cc.badOnly;
