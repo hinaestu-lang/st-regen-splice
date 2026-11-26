@@ -266,6 +266,28 @@ async function idbPut(key, value) {
     }
 }
 
+const BIN_KEY = 'bin';
+const BIN_DAYS = 30;
+const BIN_MAX = 300;
+const BIN_PREVIEW = 60;
+const BIN_TYPES = { chat: '聊天文件', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
+
+async function binAll() {
+    const cut = Date.now() - BIN_DAYS * 864e5;
+    return ((await idbGet(BIN_KEY)) || []).filter(x => x.time >= cut);
+}
+
+async function binAdd(items) {
+    const list = (Array.isArray(items) ? items : [items]).map(x => ({ id: pzUid(), time: Date.now(), ...x }));
+    if (!list.length) return;
+    await idbPut(BIN_KEY, [...list, ...(await binAll())].slice(0, BIN_MAX));
+}
+
+async function binDrop(ids) {
+    const set = new Set(ids);
+    await idbPut(BIN_KEY, (await binAll()).filter(x => !set.has(x.id)));
+}
+
 const getSnaps = key => idbGet(key);
 const getLib = () => idbGet('library');
 const putLib = arr => idbPut('library', arr);
@@ -1785,7 +1807,7 @@ const isDirty = () => {
     if (!t) return false;
     if (t.kind === 'preset') return !!pz.tgt?.dirty;
     if (t.kind === 'regex') return rx.dirty;
-    if (t.kind === 'set') return false;
+    if (t.kind === 'set' || t.kind === 'bin') return false;
     return !!bodyEl() && bodyEl().value !== t.initial;
 };
 
@@ -1802,6 +1824,7 @@ function ensureShell() {
         <option value="world">世界书</option>
         <option value="preset">预设缝合</option>
         <option value="regex">正则</option>
+        <option value="bin">回收站</option>
         <option value="set">设置</option>
       </select>
       <div class="rs_bar_title rs_title"></div>
@@ -1915,6 +1938,7 @@ function ensureShell() {
       </div>
     </div>
     <div class="rs_set"></div>
+    <div class="rs_bin"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
         <div class="rs_rx_tabs"><span data-t="g">全局</span><span data-t="p">预设</span><span data-t="c">角色</span></div>
@@ -1986,12 +2010,14 @@ function showTarget(t) {
     clearSel();
     if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
     if (state.target?.kind === 'regex' && t.kind !== 'regex') rxReset();
-    $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex').toggleClass('rs_mode_set', t.kind === 'set');
-    if (t.kind === 'set') {
+    $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex')
+        .toggleClass('rs_mode_set', t.kind === 'set').toggleClass('rs_mode_bin', t.kind === 'bin');
+    if (t.kind === 'set' || t.kind === 'bin') {
         state.target = t;
-        $('#rs_panel .rs_kind').val('set');
+        $('#rs_panel .rs_kind').val(t.kind);
         $('#rs_panel .rs_title').text(t.subtitle);
-        renderSettings();
+        if (t.kind === 'set') renderSettings();
+        else binRender();
         return;
     }
     if (t.kind === 'preset' || t.kind === 'regex') {
@@ -2105,17 +2131,22 @@ async function deleteVersion() {
     const r = t?.refs[state.ref];
     if (!r) return;
     if (r.verId) {
-        if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？`))) return;
-        await putVers(t.key, (await getVers(t.key)).filter(v => v.id !== r.verId));
+        if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？可以在回收站找回`))) return;
+        const vers = await getVers(t.key);
+        await binAdd(vers.filter(v => v.id === r.verId).map(v => ({ type: 'ver', label: r.label.replace(/^★ /, ''), sub: t.subtitle, data: { key: t.key, item: v } })));
+        await putVers(t.key, vers.filter(v => v.id !== r.verId));
         toastr.success('版本已删除');
     } else if (r.snapIdx !== undefined) {
-        if (!(await askConfirm(`删除「${r.label}」？`))) return;
+        if (!(await askConfirm(`删除「${r.label}」？可以在回收站找回`))) return;
         const arr = await getSnaps(t.key);
-        if (arr[r.snapIdx]?.time === r.time) arr.splice(r.snapIdx, 1);
+        if (arr[r.snapIdx]?.time === r.time) {
+            await binAdd({ type: 'snap', label: r.label, sub: t.subtitle, data: { key: t.key, items: arr.slice(r.snapIdx, r.snapIdx + 1) } });
+            arr.splice(r.snapIdx, 1);
+        }
         await idbPut(t.key, arr);
         toastr.success('存档已删除');
     } else if (r.swipe !== undefined) {
-        if (!(await askConfirm(`从聊天里删掉这一楼的「${r.label}」？删了就找不回来`))) return;
+        if (!(await askConfirm(`从聊天里删掉这一楼的「${r.label}」？可以在回收站找回`))) return;
         if (!(await deleteSwipe(t.id, r.swipe))) return;
         const fresh = msgTarget(t.id);
         t.refs = fresh.refs;
@@ -2135,7 +2166,8 @@ async function deleteVersion() {
 async function clearSnaps() {
     const t = state.target;
     const n = t?.refs.filter(x => x.snapIdx !== undefined).length;
-    if (!n || !(await askConfirm(`清空这一项的全部存档？收藏的★版本会保留`))) return;
+    if (!n || !(await askConfirm(`清空这一项的全部存档？收藏的★版本会保留，清掉的可以在回收站找回`))) return;
+    await binAdd({ type: 'snap', label: `全部存档（${n} 个）`, sub: t.subtitle, data: { key: t.key, items: await getSnaps(t.key) } });
     await idbPut(t.key, []);
     state.ref = 0;
     await refreshRefs();
@@ -2146,6 +2178,12 @@ async function deleteSwipe(id, i) {
     const c = ctx();
     const msg = c.chat[id];
     if (!msg || !Array.isArray(msg.swipes) || msg.swipes.length < 2 || i === msg.swipe_id) return false;
+    await binAdd({
+        type: 'swipe',
+        label: String(msg.swipes[i] || '').replace(/\s+/g, ' ').slice(0, BIN_PREVIEW),
+        sub: `${msg.name || ''} · 第 ${id} 楼`,
+        data: { chat: c.getCurrentChatId?.(), mes: id, text: msg.swipes[i], info: msg.swipe_info?.[i] ?? null },
+    });
     msg.swipes.splice(i, 1);
     if (Array.isArray(msg.swipe_info)) msg.swipe_info.splice(i, 1);
     if (i < msg.swipe_id) msg.swipe_id--;
@@ -2711,12 +2749,19 @@ async function pzSetTarget(name, type = pz.tgt?.type || 'p') {
         pz.tgt = { type, name, data, undo: [], redo: [], dirty: false };
         return true;
     }
-    const pm = await pzPM();
-    const st = pzStored(pm, name);
-    if (!st) {
+    const preset = await pzLoadPreset(name);
+    if (!preset) {
         toastr.warning('找不到这个预设');
         return false;
     }
+    pz.tgt = { type, name, data: preset, undo: [], redo: [], dirty: false };
+    return true;
+}
+
+async function pzLoadPreset(name) {
+    const pm = await pzPM();
+    const st = pm && pzStored(pm, name);
+    if (!st) return null;
     const preset = structuredClone(st.preset);
     if (name === pm.getSelectedPresetName()) {
         const live = await pzLive(pm);
@@ -2726,8 +2771,7 @@ async function pzSetTarget(name, type = pz.tgt?.type || 'p') {
         }
     }
     if (!Array.isArray(preset.prompts)) preset.prompts = [];
-    pz.tgt = { type, name, data: preset, undo: [], redo: [], dirty: false };
-    return true;
+    return preset;
 }
 
 const pzIsWorld = () => pz.tgt?.type === 'w';
@@ -3444,6 +3488,25 @@ async function pzWriteWorld(name, data) {
     }
 }
 
+function pzRemoved(t, before) {
+    if (t.type === 'w') {
+        const list = pzWorldList(before);
+        return list.filter(w => !t.data.entries[w.uid]).map(w => ({
+            type: 'wi', label: String(w.comment || '（无名）'), sub: `世界书「${t.name}」`,
+            data: { name: t.name, item: w, after: list[list.indexOf(w) - 1]?.uid ?? null },
+        }));
+    }
+    const ids = new Set(t.data.prompts.map(x => x.identifier));
+    const order = pzOrder(before).order;
+    return (before.prompts || []).filter(x => !ids.has(x.identifier)).map(x => {
+        const i = order.findIndex(o => o.identifier === x.identifier);
+        return {
+            type: 'pz', label: String(x.name || '（无名）'), sub: `预设「${t.name}」`,
+            data: { name: t.name, item: x, enabled: i >= 0 && !!order[i].enabled, after: i > 0 ? order[i - 1].identifier : null, inOrder: i >= 0 },
+        };
+    });
+}
+
 async function pzSave() {
     const t = pz.tgt;
     if (!t?.dirty) return;
@@ -3461,6 +3524,7 @@ async function pzSave() {
     }
     $btn.removeClass('rs_off');
     if (!ok) return;
+    if (before) await binAdd(pzRemoved(t, before));
     t.dirty = false;
     pzRender();
     toastr.success(`「${t.name}」已保存，点这里撤回`, '', {
@@ -4075,6 +4139,10 @@ async function rxSave() {
     }
     $btn.removeClass('rs_off');
     if (!ok) return;
+    const kept = new Set(rx.list.map(x => x.id));
+    await binAdd(before.map((x, i) => [x, i]).filter(([x]) => !kept.has(x.id)).map(([x, i]) => ({
+        type: 'rx', label: String(x.scriptName || '（无名）'), sub: rxScopeName(scope), data: { scope, item: x, index: i },
+    })));
     rx.dirty = false;
     rxRender();
     await rxRefreshChat();
@@ -4214,6 +4282,165 @@ async function openRegex() {
 
 const DROPS = { pz: pzMove, rx: rxMove };
 
+const bin = { type: '' };
+
+function binAgo(t) {
+    const m = Math.round((Date.now() - t) / 60000);
+    if (m < 60) return `${Math.max(1, m)} 分钟前`;
+    if (m < 1440) return `${Math.round(m / 60)} 小时前`;
+    return `${Math.round(m / 1440)} 天前`;
+}
+
+async function binRender() {
+    const all = await binAll();
+    const types = [...new Set(all.map(x => x.type))];
+    if (bin.type && !types.includes(bin.type)) bin.type = '';
+    const list = bin.type ? all.filter(x => x.type === bin.type) : all;
+    $('#rs_panel .rs_bin').html(`
+<div class="rs_bin_bar">
+  <span>${all.length ? `共 ${all.length} 项，保留 ${BIN_DAYS} 天` : ''}</span>
+  ${all.length ? '<span class="rs_pz_card_btn rs_pz_card_del rs_bin_clear">清空回收站</span>' : ''}
+</div>
+${types.length > 1 ? `<div class="rs_pz_cats rs_on">${['', ...types].map(t => `<span class="rs_chip${bin.type === t ? ' rs_on' : ''}" data-t="${t}">${t ? BIN_TYPES[t] : '全部'}</span>`).join('')}</div>` : ''}
+<div class="rs_pz_list rs_bin_list">${list.map(x => `<div class="rs_pz_row" data-id="${x.id}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(x.label || '（无名）')}</span><span class="rs_pz_cat_tag">${BIN_TYPES[x.type] || x.type}</span></div><div class="rs_pz_pv">${escapeHtml(`${x.sub || ''} · ${binAgo(x.time)}删除`)}</div></div><span class="rs_pz_card_btn" data-a="restore">恢复</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="drop">删除</span></div>`).join('')
+    || '<div class="rs_empty">回收站是空的。插件里删掉的聊天文件、预设和世界书条目、正则、楼层版本、存档都会先放在这里。</div>'}</div>`);
+}
+
+async function binRestore(x) {
+    const d = x.data;
+    const c = ctx();
+    if (x.type === 'ver') {
+        const v = await getVers(d.key);
+        if (!v.some(y => y.id === d.item.id)) await putVers(d.key, [...v, d.item]);
+        return true;
+    }
+    if (x.type === 'snap') {
+        const a = await getSnaps(d.key);
+        const have = new Set(a.map(y => `${y.time}|${y.text}`));
+        await idbPut(d.key, [...a, ...d.items.filter(y => !have.has(`${y.time}|${y.text}`))].sort((p, q) => p.time - q.time));
+        return true;
+    }
+    if (x.type === 'swipe') {
+        const m = c.chat?.[d.mes];
+        if (c.getCurrentChatId?.() !== d.chat || !m) {
+            toastr.warning('先打开原来那个聊天再恢复');
+            return false;
+        }
+        m.swipes = Array.isArray(m.swipes) ? m.swipes : [m.mes];
+        m.swipes.push(d.text);
+        if (Array.isArray(m.swipe_info)) m.swipe_info.push(d.info ?? {});
+        refreshSwipeUI(d.mes, m);
+        await c.saveChat();
+        return true;
+    }
+    if (x.type === 'rx') {
+        if (state.target?.kind === 'regex' && rx.scope === d.scope && rx.dirty) {
+            toastr.warning('正则页还有没保存的改动，先保存或撤回');
+            return false;
+        }
+        const cur = structuredClone(await rxStore(d.scope));
+        if (!cur.some(y => y.id === d.item.id)) {
+            cur.splice(Math.min(d.index, cur.length), 0, d.item);
+            if (!(await rxWrite(d.scope, cur))) return false;
+        }
+        if (state.target?.kind === 'regex' && rx.scope === d.scope) {
+            await rxLoad(d.scope);
+            rxRender();
+        }
+        await rxRefreshChat();
+        return true;
+    }
+    if (x.type === 'pz' || x.type === 'wi') {
+        const type = x.type === 'wi' ? 'w' : 'p';
+        if (pz.tgt?.type === type && pz.tgt.name === d.name && pz.tgt.dirty) {
+            toastr.warning('缝合页里这一项还有没保存的改动，先保存或撤回');
+            return false;
+        }
+        if (type === 'w') {
+            const data = structuredClone(await c.loadWorldInfo(d.name));
+            if (!data?.entries) {
+                toastr.warning('找不到这本世界书');
+                return false;
+            }
+            const item = structuredClone(d.item);
+            const same = data.entries[item.uid];
+            if (!same || same.comment !== item.comment || same.content !== item.content) {
+                if (same) item.uid = Math.max(-1, ...Object.keys(data.entries).map(Number).filter(Number.isInteger)) + 1;
+                const list = pzWorldList(data);
+                const i = d.after == null ? 0 : list.findIndex(w => w.uid === d.after) + 1;
+                list.splice(i > 0 ? i : 0, 0, item);
+                data.entries[item.uid] = item;
+                list.forEach((w, k) => { w.displayIndex = k; });
+                if (!(await pzWriteWorld(d.name, data))) return false;
+            }
+        } else {
+            const pm = await pzPM();
+            const preset = await pzLoadPreset(d.name);
+            if (!preset) {
+                toastr.warning('找不到这个预设');
+                return false;
+            }
+            if (!preset.prompts.some(y => y.identifier === d.item.identifier)) {
+                preset.prompts.push(structuredClone(d.item));
+                if (d.inOrder) {
+                    const order = pzOrder(preset).order;
+                    const i = d.after ? order.findIndex(o => o.identifier === d.after) + 1 : 0;
+                    order.splice(i > 0 ? i : 0, 0, { identifier: d.item.identifier, enabled: d.enabled });
+                }
+                if (!(await pzWrite(pm, d.name, preset))) return false;
+            }
+        }
+        if (pz.tgt?.type === type && pz.tgt.name === d.name) {
+            await pzSetTarget(d.name, type);
+            pzRender();
+        }
+        return true;
+    }
+    if (x.type === 'chat') {
+        const g = !!d.group;
+        const got = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: d.file_id } : { ch_name: d.owner, file_name: d.file_id, avatar_url: d.avatar });
+        const old = got?.ok ? await got.json().catch(() => null) : null;
+        const id = Array.isArray(old) && old.length ? `${d.file_id} 恢复 ${humanStamp()}` : d.file_id;
+        const res = await ccPost(g ? '/api/chats/group/save' : '/api/chats/save', g
+            ? { id, chat: d.chat, force: true }
+            : { ch_name: d.owner, file_name: id, avatar_url: d.avatar, chat: d.chat, force: true });
+        if (!res?.ok) return false;
+        const gr = g && (c.groups || []).find(y => y.id === d.group);
+        if (gr && Array.isArray(gr.chats) && !gr.chats.includes(id)) {
+            gr.chats.push(id);
+            await ccPost('/api/groups/edit', gr);
+        }
+        if (id !== d.file_id) toastr.info(`原名已被占用，恢复成「${id}」`);
+        return true;
+    }
+    return false;
+}
+
+function humanStamp() {
+    const d = new Date();
+    const z = n => String(n).padStart(2, '0');
+    return `${d.getMonth() + 1}-${z(d.getDate())} ${z(d.getHours())}${z(d.getMinutes())}`;
+}
+
+async function binAct(id, a) {
+    const x = (await binAll()).find(y => y.id === id);
+    if (!x) return;
+    if (a === 'drop') {
+        if (!(await askConfirm(`彻底删除「${x.label}」？之后就真的找不回来了`))) return;
+    } else {
+        let ok = false;
+        try {
+            ok = await binRestore(x);
+        } catch (e) {
+            console.error('[重生成拼接] 恢复失败', e);
+        }
+        if (!ok) return toastr.error('没能恢复');
+        toastr.success(`「${x.label}」已恢复`);
+    }
+    await binDrop([id]);
+    binRender();
+}
+
 const LOADERS = {
     msg: async () => {
         const id = lastAiIndex();
@@ -4235,6 +4462,7 @@ const LOADERS = {
     },
     regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
     set: async () => ({ kind: 'set', subtitle: '插件设置', initial: '' }),
+    bin: async () => ({ kind: 'bin', subtitle: '删掉的东西先放这里', initial: '' }),
 };
 
 async function openFromBall() {
@@ -4272,6 +4500,16 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_pz_all', pzSelectAll)
         .on('click', '#rs_panel .rs_pz_foldall', function () { pzFoldAll(this.dataset.side); })
         .on('click', '#rs_panel .rs_pz_tokbtn', pzToggleTok)
+        .on('click', '#rs_panel .rs_bin_list .rs_pz_card_btn', function () { binAct(this.closest('[data-id]').dataset.id, this.dataset.a); })
+        .on('click', '#rs_panel .rs_bin .rs_chip', function () {
+            bin.type = this.dataset.t;
+            binRender();
+        })
+        .on('click', '#rs_panel .rs_bin_clear', async () => {
+            if (!(await askConfirm('清空回收站？里面的东西就真的找不回来了'))) return;
+            await idbPut(BIN_KEY, []);
+            binRender();
+        })
         .on('click', '#rs_panel .rs_pz_toksort', function () {
             pz.tokSort = !pz.tokSort;
             $(this).toggleClass('rs_on', pz.tokSort);
@@ -4816,14 +5054,20 @@ async function ccPost(url, body) {
 
 async function ccRemove(x) {
     const g = !!x.group;
+    const getIt = async () => {
+        const r = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: x.file_id } : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar });
+        return r?.ok ? await r.json().catch(() => null) : null;
+    };
+    const body = await getIt();
+    if (Array.isArray(body) && body.length > 1) {
+        await binAdd({ type: 'chat', label: x.file_name.replace(/\.jsonl$/, ''), sub: `${x.owner} · ${body.length - 1} 条`, data: { group: x.group || null, avatar: x.avatar || null, owner: x.owner, file_id: x.file_id, chat: body } });
+    }
     const del = () => ccPost(g ? '/api/chats/group/delete' : '/api/chats/delete', g ? { id: x.file_id } : { chatfile: x.file_name, avatar_url: x.avatar });
     const first = await del();
     if (first?.ok) return true;
     const why = first ? await first.text().catch(() => '') : '';
     if (first?.status !== 404 && !/not\s*found/i.test(why)) return false;
-    const got = await ccPost(g ? '/api/chats/group/get' : '/api/chats/get', g ? { id: x.file_id } : { ch_name: x.owner, file_name: x.file_id, avatar_url: x.avatar });
-    const data = got?.ok ? await got.json().catch(() => null) : null;
-    if (Array.isArray(data) && data.length) return false;
+    if (Array.isArray(body) && body.length) return false;
     const stub = [{ user_name: 'User', character_name: x.owner, create_date: Date.now(), chat_metadata: {} }];
     const saved = await ccPost(g ? '/api/chats/group/save' : '/api/chats/save', g
         ? { id: x.file_id, chat: stub, force: true }
@@ -4839,7 +5083,7 @@ async function ccDelete() {
     const skip = picks.filter(x => x.file_id === cur);
     const go = picks.filter(x => x.file_id !== cur);
     if (skip.length) toastr.warning('正在打开的聊天不会删，先切到别的聊天');
-    if (!go.length || !(await askConfirm(`删掉选中的 ${go.length} 个聊天文件？删了就找不回来`))) return;
+    if (!go.length || !(await askConfirm(`删掉选中的 ${go.length} 个聊天文件？可以在回收站找回`))) return;
     let ok = 0;
     for (const x of go) {
         if (await ccRemove(x)) ok++;

@@ -804,6 +804,7 @@
     user-select: none;
 }
 
+#rs_panel.rs_mode_bin > :not(.rs_top):not(.rs_bin),
 #rs_panel.rs_mode_set > :not(.rs_top):not(.rs_set),
 #rs_panel.rs_mode_regex > :not(.rs_top):not(.rs_rx),
 #rs_panel.rs_mode_preset > :not(.rs_top):not(.rs_pz) {
@@ -1881,4 +1882,33 @@
 
 #rs_panel .rs_pz_toksorted .rs_drag {
     visibility: hidden;
+}
+
+#rs_panel .rs_bin {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+}
+
+#rs_panel.rs_mode_bin .rs_bin {
+    display: flex;
+}
+
+#rs_panel .rs_bin_bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    opacity: 0.85;
+}
+
+#rs_panel .rs_bin_list {
+    flex: 1;
+}
+
+#rs_panel .rs_bin_list .rs_pz_card_btn {
+    flex: none;
 }
