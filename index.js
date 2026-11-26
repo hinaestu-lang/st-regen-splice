@@ -4448,7 +4448,6 @@ async function binRestore(x) {
         pu.personas[d.avatar] = d.name;
         if (d.desc) (pu.persona_descriptions = pu.persona_descriptions || {})[d.avatar] = d.desc;
         const meta = shelfPersonaMeta();
-        if (d.tags?.length) meta.personaTags[d.avatar] = d.tags;
         if (d.fav && !meta.personaFav.includes(d.avatar)) meta.personaFav.push(d.avatar);
         c.saveSettingsDebounced();
         try { (await import('/scripts/personas.js')).getUserAvatars?.(true); } catch { }
@@ -4494,7 +4493,7 @@ async function binAct(id, a) {
     binRender();
 }
 
-const SHELF_TABS = { char: [['all', '全部'], ['tag', '标签'], ['fav', '收藏'], ['recent', '最近']], persona: [['all', '全部'], ['tag', '标签'], ['fav', '收藏']] };
+const SHELF_TABS = { char: [['all', '全部'], ['tag', '标签'], ['fav', '收藏'], ['recent', '最近']], persona: [['all', '全部'], ['tag', '标题'], ['fav', '收藏']] };
 const SHELF_RECENT = 30;
 const SHELF_STACK = 3;
 const SHELF_UNTAGGED = '@none';
@@ -4508,14 +4507,38 @@ function shelfThumb(kind, id) {
 
 function shelfPersonaMeta() {
     const s = settings();
-    s.personaTags = s.personaTags || {};
     s.personaFav = s.personaFav || [];
+    if (s.personaTags) {
+        const pu = ctx().powerUserSettings || {};
+        pu.persona_descriptions = pu.persona_descriptions || {};
+        Object.entries(s.personaTags).forEach(([id, tags]) => {
+            if (tags?.[0] && !personaTitle(pu, id)) pu.persona_descriptions[id] = { ...(pu.persona_descriptions[id] || {}), title: tags[0] };
+        });
+        delete s.personaTags;
+        ctx().saveSettingsDebounced();
+    }
     return s;
+}
+
+function personaTitle(pu, id) {
+    return String(pu.persona_descriptions?.[id]?.title ?? '').trim();
+}
+
+async function personaSetTitle(id, title) {
+    const { pu } = await personaInfo();
+    pu.persona_descriptions = pu.persona_descriptions || {};
+    pu.persona_descriptions[id] = { ...(pu.persona_descriptions[id] || {}), title };
+}
+
+async function personaRefresh() {
+    ctx().saveSettingsDebounced();
+    try { (await import('/scripts/personas.js')).getUserAvatars?.(true); } catch { }
 }
 
 function shelfTags() {
     if (shelf.kind === 'char') return (ctx().tags || []).map(t => ({ id: t.id, name: String(t.name) }));
-    const names = [...new Set(Object.values(shelfPersonaMeta().personaTags).flat())];
+    const pu = ctx().powerUserSettings || {};
+    const names = [...new Set(Object.keys(pu.personas || {}).map(id => personaTitle(pu, id)).filter(Boolean))];
     return names.sort((a, b) => a.localeCompare(b, 'zh')).map(n => ({ id: n, name: n }));
 }
 
@@ -4539,7 +4562,7 @@ async function shelfItems() {
         id,
         name: String(name ?? id),
         fav: meta.personaFav.includes(id),
-        tags: meta.personaTags[id] || [],
+        tags: personaTitle(pu, id) ? [personaTitle(pu, id)] : [],
         last: 0,
         cur: id === cur,
     }));
@@ -4590,12 +4613,12 @@ async function shelfRender() {
         const tags = shelfTags();
         const folders = tags.map(t => [t.id, t.name, items.filter(x => x.tags.includes(t.id))]).filter(([, , m]) => m.length);
         const none = items.filter(x => !x.tags.length);
-        html = folders.map(([id, name, m]) => shelfFolder(id, name, m)).join('') + (none.length ? shelfFolder(SHELF_UNTAGGED, '未分类', none) : '');
-        if (!html) html = '<div class="rs_empty">还没有标签。点一个角色，在“标签”里加上就会出现在这里。</div>';
+        html = folders.map(([id, name, m]) => shelfFolder(id, name, m)).join('') + (none.length ? shelfFolder(SHELF_UNTAGGED, shelf.kind === 'char' ? '未分类' : '没有标题', none) : '');
+        if (!html) html = `<div class="rs_empty">${shelf.kind === 'char' ? '还没有标签。点一个角色，在“标签”里加上就会出现在这里。' : '还没有标题。点一个人设，在“标题”里设一个就会出现在这里。'}</div>`;
     } else {
         if (shelf.tab === 'tag' && shelf.folder) {
-            const name = shelf.folder === SHELF_UNTAGGED ? '未分类' : shelfTags().find(t => t.id === shelf.folder)?.name ?? '';
-            const manage = shelf.folder === SHELF_UNTAGGED ? '' : '<span class="rs_pz_card_btn" data-a="tagren">改名</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="tagdel">删除标签</span>';
+            const name = shelf.folder === SHELF_UNTAGGED ? (shelf.kind === 'char' ? '未分类' : '没有标题') : shelfTags().find(t => t.id === shelf.folder)?.name ?? '';
+            const manage = shelf.folder === SHELF_UNTAGGED ? '' : `<span class="rs_pz_card_btn" data-a="tagren">改名</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="tagdel">${shelf.kind === 'char' ? '删除标签' : '清掉标题'}</span>`;
             head = `<div class="rs_shelf_crumb"><span class="rs_icon rs_shelf_up fa-solid fa-chevron-left"></span><b>${escapeHtml(name)}</b><div class="rs_bar_spacer"></div>${manage}</div>`;
         }
         const list = shelfFilter(items);
@@ -4639,7 +4662,7 @@ async function shelfSheet(id) {
   <div class="rs_shelf_acts">
     ${btn('edit', ch ? '编辑内容' : '编辑描述')}
     ${ch ? btn('chat', '开始聊天') : btn('use', x.cur ? '已是当前人设' : '设为当前人设')}
-    ${btn('tags', '标签')}
+    ${btn('tags', ch ? '标签' : '标题')}
     ${btn('fav', x.fav ? '取消收藏' : '收藏')}
     ${btn('ren', '改名')}
     ${btn('dup', '复制一份')}
@@ -4660,22 +4683,17 @@ async function shelfTagSheet(ids) {
     shelf.tagFor = ids;
     $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
 <div class="rs_shelf_sheet_in">
-  <div class="rs_shelf_sheet_top"><div><b>${items.length === 1 ? `「${escapeHtml(items[0].name)}」的标签` : `给 ${items.length} 个加减标签`}</b><div class="rs_pz_pv">${shelf.kind === 'char' ? '用的是酒馆自己的标签，点一下加上或去掉' : '人设标签存在插件里'}</div></div></div>
+  <div class="rs_shelf_sheet_top"><div><b>${items.length === 1 ? `「${escapeHtml(items[0].name)}」的${shelf.kind === 'char' ? '标签' : '标题'}` : `给 ${items.length} 个${shelf.kind === 'char' ? '加减标签' : '设标题'}`}</b><div class="rs_pz_pv">${shelf.kind === 'char' ? '用的是酒馆自己的标签，点一下加上或去掉' : '用的是酒馆里的“用户设定标题”，每个人设只有一个，点一下换成它或去掉'}</div></div></div>
   <div class="rs_chips rs_shelf_tagchips">${tags.map(chip).join('') || '<span class="rs_pz_pv">还没有标签</span>'}</div>
-  <div class="rs_pz_filter"><input type="text" class="rs_shelf_newtag" placeholder="新标签名字，回车添加"><div class="menu_button rs_shelf_addtag">添加</div></div>
+  <div class="rs_pz_filter"><input type="text" class="rs_shelf_newtag" placeholder="${shelf.kind === 'char' ? '新标签名字' : '新标题'}，回车添加"><div class="menu_button rs_shelf_addtag">添加</div></div>
   <div class="rs_shelf_acts">${'<div class="rs_shelf_act rs_shelf_cancel" data-a="close">完成</div>'}</div>
 </div>`);
 }
 
-function shelfSaveTags(id, next) {
+async function shelfSaveTags(id, next) {
     const c = ctx();
-    if (shelf.kind === 'char') {
-        c.tagMap[id] = next;
-    } else {
-        const meta = shelfPersonaMeta();
-        if (next.length) meta.personaTags[id] = next;
-        else delete meta.personaTags[id];
-    }
+    if (shelf.kind === 'char') c.tagMap[id] = next;
+    else await personaSetTitle(id, next[next.length - 1] || '');
     c.saveSettingsDebounced();
 }
 
@@ -4683,7 +4701,7 @@ async function shelfToggleTag(tagId) {
     const ids = shelf.tagFor || [];
     const items = (await shelfItems()).filter(x => ids.includes(x.id));
     const all = items.every(x => x.tags.includes(tagId));
-    items.forEach(x => shelfSaveTags(x.id, all ? x.tags.filter(t => t !== tagId) : [...new Set([...x.tags, tagId])]));
+    for (const x of items) await shelfSaveTags(x.id, all ? x.tags.filter(t => t !== tagId) : [...new Set([...x.tags, tagId])]);
     await shelfAfterTags();
     await shelfTagSheet(ids);
 }
@@ -4702,7 +4720,7 @@ async function shelfAddTag() {
         }
     }
     const items = (await shelfItems()).filter(x => (shelf.tagFor || []).includes(x.id));
-    items.forEach(x => shelfSaveTags(x.id, [...new Set([...x.tags, id])]));
+    for (const x of items) await shelfSaveTags(x.id, [...new Set([...x.tags, id])]);
     await shelfAfterTags();
     await shelfTagSheet(shelf.tagFor);
 }
@@ -4710,7 +4728,7 @@ async function shelfAddTag() {
 async function shelfAfterTags() {
     if (shelf.kind === 'char') {
         try { (await import('/script.js')).printCharactersDebounced?.(); } catch { }
-    }
+    } else await personaRefresh();
     await shelfRender();
 }
 
@@ -4724,21 +4742,16 @@ async function shelfTagManage(a) {
         if (!next || next === name) return;
         if (shelf.kind === 'char') c.tags.find(t => t.id === id).name = next;
         else {
-            const meta = shelfPersonaMeta();
-            Object.keys(meta.personaTags).forEach(k => { meta.personaTags[k] = [...new Set(meta.personaTags[k].map(t => (t === id ? next : t)))]; });
+            for (const x of (await shelfItems()).filter(y => y.tags.includes(id))) await personaSetTitle(x.id, next);
             shelf.folder = next;
         }
     } else {
-        if (!(await askConfirm(`删除标签「${name}」？只是去掉标签，${shelf.kind === 'char' ? '角色' : '人设'}本身不会删`))) return;
+        if (!(await askConfirm(shelf.kind === 'char' ? `删除标签「${name}」？只是去掉标签，角色本身不会删` : `清掉标题「${name}」？这些人设的标题会变成空的，人设本身不会删`))) return;
         if (shelf.kind === 'char') {
             c.tags.splice(c.tags.findIndex(t => t.id === id), 1);
             Object.keys(c.tagMap).forEach(k => { c.tagMap[k] = c.tagMap[k].filter(t => t !== id); });
         } else {
-            const meta = shelfPersonaMeta();
-            Object.keys(meta.personaTags).forEach(k => {
-                meta.personaTags[k] = meta.personaTags[k].filter(t => t !== id);
-                if (!meta.personaTags[k].length) delete meta.personaTags[k];
-            });
+            for (const x of (await shelfItems()).filter(y => y.tags.includes(id))) await personaSetTitle(x.id, '');
         }
         shelf.folder = null;
     }
@@ -4812,10 +4825,7 @@ async function shelfDuplicate(id) {
         pu.personas[data.path] = `${pu.personas[id] ?? id} 副本`;
         pu.persona_descriptions = pu.persona_descriptions || {};
         if (pu.persona_descriptions[id]) pu.persona_descriptions[data.path] = structuredClone(pu.persona_descriptions[id]);
-        const meta = shelfPersonaMeta();
-        if (meta.personaTags[id]) meta.personaTags[data.path] = [...meta.personaTags[id]];
-        c.saveSettingsDebounced();
-        try { (await import('/scripts/personas.js')).getUserAvatars?.(true); } catch { }
+        await personaRefresh();
         toastr.success('复制好了');
     } catch (e) {
         console.error('[重生成拼接] 复制人设失败', e);
@@ -4846,12 +4856,11 @@ async function shelfDelete(ids) {
             const { pu } = await personaInfo();
             const img = await fetch(`/User Avatars/${encodeURIComponent(x.id)}`).then(r => (r.ok ? r.blob() : null)).catch(() => null);
             const meta = shelfPersonaMeta();
-            await binAdd({ type: 'persona', label: x.name, sub: '用户人设', data: { avatar: x.id, blob: img, name: x.name, desc: pu.persona_descriptions?.[x.id] ?? null, tags: meta.personaTags[x.id] || [], fav: meta.personaFav.includes(x.id) } });
+            await binAdd({ type: 'persona', label: x.name, sub: '用户人设', data: { avatar: x.id, blob: img, name: x.name, desc: pu.persona_descriptions?.[x.id] ?? null, fav: meta.personaFav.includes(x.id) } });
             const res = await apiPost('/api/avatars/delete', { avatar: x.id });
             if (!res?.ok) continue;
             delete pu.personas[x.id];
             if (pu.persona_descriptions) delete pu.persona_descriptions[x.id];
-            delete meta.personaTags[x.id];
             meta.personaFav = meta.personaFav.filter(y => y !== x.id);
             n++;
         }
