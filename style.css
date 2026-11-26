@@ -1380,15 +1380,25 @@
     background: var(--SmartThemeBlurTintColor) !important;
     color: var(--SmartThemeBodyColor) !important;
     font-size: var(--rs-font, 15px);
-    min-height: 160px;
     line-height: 1.65;
+}
+
+#rs_panel .rs_pz_card .rs_pz_ct {
+    min-height: 160px;
     resize: none;
     overflow-y: auto;
+}
+
+#rs_panel .rs_pz_card_row input {
+    box-sizing: border-box;
+    height: 36px;
+    line-height: normal;
 }
 
 #rs_panel .rs_pz_card_row select {
     flex: none;
     width: auto;
+    height: 36px;
     margin: 0;
     font-size: 13px;
 }
