@@ -266,6 +266,7 @@ async function idbPut(key, value) {
     }
 }
 
+const unHtml = h => $('<div>').html(String(h ?? '')).text();
 const BIN_KEY = 'bin';
 const BIN_DAYS = 30;
 const BIN_MAX = 300;
@@ -2141,14 +2142,14 @@ async function deleteVersion() {
     if (r.verId) {
         if (!(await askConfirm(`删除版本「${r.label.replace(/^★ /, '')}」？可以在回收站找回`))) return;
         const vers = await getVers(t.key);
-        await binAdd(vers.filter(v => v.id === r.verId).map(v => ({ type: 'ver', label: r.label.replace(/^★ /, ''), sub: t.subtitle, data: { key: t.key, item: v } })));
+        await binAdd(vers.filter(v => v.id === r.verId).map(v => ({ type: 'ver', label: r.label.replace(/^★ /, ''), sub: unHtml(t.subtitle), data: { key: t.key, item: v } })));
         await putVers(t.key, vers.filter(v => v.id !== r.verId));
         toastr.success('版本已删除');
     } else if (r.snapIdx !== undefined) {
         if (!(await askConfirm(`删除「${r.label}」？可以在回收站找回`))) return;
         const arr = await getSnaps(t.key);
         if (arr[r.snapIdx]?.time === r.time) {
-            await binAdd({ type: 'snap', label: r.label, sub: t.subtitle, data: { key: t.key, items: arr.slice(r.snapIdx, r.snapIdx + 1) } });
+            await binAdd({ type: 'snap', label: r.label, sub: unHtml(t.subtitle), data: { key: t.key, items: arr.slice(r.snapIdx, r.snapIdx + 1) } });
             arr.splice(r.snapIdx, 1);
         }
         await idbPut(t.key, arr);
@@ -2175,7 +2176,7 @@ async function clearSnaps() {
     const t = state.target;
     const n = t?.refs.filter(x => x.snapIdx !== undefined).length;
     if (!n || !(await askConfirm(`清空这一项的全部存档？收藏的★版本会保留，清掉的可以在回收站找回`))) return;
-    await binAdd({ type: 'snap', label: `全部存档（${n} 个）`, sub: t.subtitle, data: { key: t.key, items: await getSnaps(t.key) } });
+    await binAdd({ type: 'snap', label: `全部存档（${n} 个）`, sub: unHtml(t.subtitle), data: { key: t.key, items: await getSnaps(t.key) } });
     await idbPut(t.key, []);
     state.ref = 0;
     await refreshRefs();
@@ -2657,13 +2658,15 @@ async function pzDocxText(buf) {
     return out.join('\n');
 }
 
+const wiName = (w, i) => String(w.comment || (Array.isArray(w.key) && w.key.join('、')) || `条目 ${w.uid ?? i}`);
+
 function pzWorldEntries(entries, prefix) {
     return Object.values(entries || {})
         .sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid))
         .map((e, i) => ({
             key: `${prefix}${e.uid ?? i}`,
             id: null,
-            name: String(e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid ?? i}`),
+            name: wiName(e, i),
             role: 'system',
             content: String(e.content ?? ''),
             raw: null,
@@ -2792,7 +2795,7 @@ function pzFromWorld(data) {
     return pzClassify(pzWorldList(data).map(w => ({
         key: 'w:' + w.uid,
         id: String(w.uid),
-        name: String(w.comment ?? ''),
+        name: wiName(w),
         role: 'system',
         content: String(w.content ?? ''),
         raw: null,
@@ -3223,7 +3226,9 @@ function pzToggleSel(key, on) {
 }
 
 function pzSelectAll() {
-    const rows = pzFilter(pz.src?.entries || [], 'src');
+    const list = pz.src?.entries || [];
+    const ci = !pzQuery('src') && pz.catf.src ? list.findIndex(e => e.key === pz.catf.src) : -1;
+    const rows = ci >= 0 ? list.slice(ci, ci + 1 + pzGroupSize(list, ci)) : pzFilter(list, 'src');
     const all = rows.length && rows.every(e => pz.sel.has(e.key));
     rows.forEach(e => pzToggleSel(e.key, !all));
     pzRenderAct();
@@ -3501,7 +3506,7 @@ function pzRemoved(t, before) {
     if (t.type === 'w') {
         const list = pzWorldList(before);
         return list.filter(w => !t.data.entries[w.uid]).map(w => ({
-            type: 'wi', label: String(w.comment || '（无名）'), sub: `世界书「${t.name}」`,
+            type: 'wi', label: wiName(w), sub: `世界书「${t.name}」`,
             data: { name: t.name, item: w, after: list[list.indexOf(w) - 1]?.uid ?? null },
         }));
     }
@@ -3751,6 +3756,7 @@ async function openStitch() {
     }
     if (!pz.tgt && !(await pzSetTarget(pm.getSelectedPresetName(), 'p'))) return;
     if (!pz.src) await pzSetSource('cur');
+    $('#rs_panel .rs_pz').removeClass('rs_pz_picking_pos rs_pz_sching');
     await pzFillSelects();
     pzRender();
     applySplitRatio();
@@ -4271,6 +4277,7 @@ function rxReset() {
 
 async function openRegex() {
     rxCloseEd();
+    rxClosePick();
     const o = await rxScopes();
     const known = rx.scope === 'g' || [...o.presets, ...o.chars].some(x => x.id === rx.scope);
     await rxLoad(known ? rx.scope : 'g');
@@ -4921,7 +4928,8 @@ const LOOK_RANGE = { panelWidth: [320, 1400], panelHeight: [50, 100], editFont: 
 
 function lookNum(k) {
     const [lo, hi] = LOOK_RANGE[k];
-    return Math.min(hi, Math.max(lo, Number(settings()[k]) || DEFAULTS[k]));
+    const v = Number(settings()[k]);
+    return Math.min(hi, Math.max(lo, Number.isFinite(v) && settings()[k] !== '' ? v : DEFAULTS[k]));
 }
 
 function applyLook() {
@@ -4936,7 +4944,7 @@ function applyLook() {
         const v = /^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : '';
         el.style.setProperty({ accent: '--rs-accent', panelBg: '--rs-bg', panelText: '--rs-text' }[k], v || null);
     });
-    ov.style.background = `rgba(0, 0, 0, ${(s.dim ?? DEFAULTS.dim) / 100})`;
+    ov.style.background = `rgba(0, 0, 0, ${lookNum('dim') / 100})`;
     ov.classList.toggle('rs_center', lookNum('panelHeight') < 100);
     applySplitRatio();
 }
