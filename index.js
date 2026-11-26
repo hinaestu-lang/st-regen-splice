@@ -19,6 +19,8 @@ const DEFAULTS = {
     panelText: '',
     dim: 45,
     pzRatio: 0.45,
+    pzSchemes: {},
+    pzRadio: {},
     snapKeep: 30,
     lastKind: 'msg',
     findExclude: '',
@@ -1893,9 +1895,18 @@ function ensureShell() {
         <div class="rs_pz_filter">
           <input type="text" class="rs_pz_q" data-side="tgt" placeholder="搜索名称或内容">
           <div class="rs_icon rs_pz_foldall fa-solid fa-layer-group" data-side="tgt" title="全部展开/收起分类"></div>
+          <div class="rs_icon rs_pz_tokbtn fa-solid fa-chart-simple" title="统计 token"></div>
+          <div class="rs_icon rs_pz_schbtn fa-solid fa-sliders" title="开关方案"></div>
         </div>
+        <div class="rs_pz_tokbar"></div>
+        <div class="rs_pz_tokopts"><span class="rs_chip rs_pz_toksort">按 token 从多到少排</span></div>
         <div class="rs_pz_cats" data-side="tgt"></div>
         <div class="rs_pz_list rs_pz_tgt_list" data-drop="pz"></div>
+      </div>
+      <div class="rs_pz_sch">
+        <div class="rs_bar"><div class="rs_bar_title rs_pz_sch_title"></div><div class="rs_icon rs_pz_sch_close fa-solid fa-xmark" title="关闭"></div></div>
+        <div class="rs_pz_sch_new menu_button">把现在的开关存成新方案</div>
+        <div class="rs_pz_list rs_pz_sch_list"></div>
       </div>
       <div class="rs_pz_pick">
         <div class="rs_bar"><div class="rs_bar_title">插在哪条后面</div><div class="rs_icon rs_pz_pick_close fa-solid fa-xmark" title="关闭"></div></div>
@@ -2417,7 +2428,7 @@ const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶
 const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
-const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, unfold: new Set(), pos: 'end', picking: false, editing: null };
+const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, tokOn: false, tokCache: new Map(), sch: false, unfold: new Set(), pos: 'end', picking: false, editing: null };
 
 const pzNorm = s => String(s ?? '').replace(/\r\n?/g, '\n').trim();
 const pzUid = () => crypto.randomUUID?.() || 'pz-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -2807,6 +2818,7 @@ function pzGroupSize(list, i) {
 function pzVisible(list, side, foldKey) {
     const q = pzQuery(side);
     if (q) return list.filter(e => pzHit(e, q)).map(e => ({ e, flat: true }));
+    if (side === 'tgt' && pz.tokOn && pz.tokSort) return list.filter(e => !e.div && !e.marker).sort((a, b) => (pzTokOf(b) || 0) - (pzTokOf(a) || 0)).map(e => ({ e, flat: true }));
     const ck = pz.catf[side];
     const ci = ck ? list.findIndex(e => e.key === ck && e.div) : -1;
     if (ci >= 0) {
@@ -2839,9 +2851,11 @@ function pzRowHtml(e, side, other, x = {}) {
     const pv = e.marker ? '系统占位，没有内容' : e.content.replace(/\s+/g, ' ').trim().slice(0, PZ_PREVIEW);
     const lead = side === 'src' ? '<span class="rs_cb_hit"><span class="rs_cb"></span></span>' : '<span class="rs_drag fa-solid fa-grip-lines" title="按住拖动排序"></span>';
     const divEdit = e.div && !x.flat ? '<span class="rs_icon rs_pz_divedit fa-solid fa-pen" title="查看/编辑这条"></span>' : '';
-    const tail = side === 'src' ? divEdit : `${divEdit}${e.inOrder ? '<span class="rs_pz_here" title="插到这条后面">插到这后</span>' : ''}<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
+    const radio = side === 'tgt' && e.div && !x.flat ? `<span class="rs_pz_radio${pzRadioOn(e.cat) ? ' rs_on' : ''}" title="单选：这一类只能开一条">单选</span>` : '';
+    const tok = side === 'tgt' && pz.tokOn ? pzTokTag(e, x) : '';
+    const tail = side === 'src' ? divEdit : `${radio}${divEdit}${e.inOrder ? '<span class="rs_pz_here" title="插到这条后面">插到这后</span>' : ''}<span class="rs_icon rs_pz_toggle fa-solid ${e.enabled ? 'fa-toggle-on' : 'fa-toggle-off'}" title="启用或关闭"></span>`;
     const cls = ['rs_pz_row', e.div && 'rs_pz_div', sel && 'rs_pz_sel', side === 'tgt' && !e.enabled && 'rs_pz_off'].filter(Boolean).join(' ');
-    return `<div class="${cls}">${lead}${fold}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${count}${tag}${cat}</div>${pv && !pz.open.has(side + e.key) ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
+    return `<div class="${cls}">${lead}${fold}<div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(e.name || '（无名）')}</span>${count}${tok}${tag}${cat}</div>${pv && !pz.open.has(side + e.key) ? `<div class="rs_pz_pv">${escapeHtml(pv)}</div>` : ''}</div>${tail}</div>`;
 }
 
 function pzCmpHtml(e, side, other) {
@@ -2917,6 +2931,14 @@ function pzRender() {
     pzFitCards();
     pzButtons();
     $('#rs_panel .rs_pz_pos').text(pzPosLabel());
+    $('#rs_panel .rs_pz_schbtn').toggle(!pzIsWorld());
+    $('#rs_panel .rs_pz_tokbtn').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_tokbar').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_tokopts').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_toksort').toggleClass('rs_on', !!pz.tokSort);
+    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokOn && !!pz.tokSort);
+    if (pz.tokOn) pzRefreshTok();
+    if (pz.sch) pzRenderSch();
     if (pz.picking) pzRenderPick();
     pzRenderAct();
 }
@@ -2995,6 +3017,7 @@ function pzTapItem(item, target) {
         return pzRenderAct();
     }
     if (side === 'tgt' && $t.closest('.rs_pz_toggle').length) return pzToggleEnabled(key);
+    if (side === 'tgt' && $t.closest('.rs_pz_radio').length) return pzToggleRadio(pzEntryOf(side, key)?.cat);
     if (side === 'tgt' && $t.closest('.rs_pz_here').length) return pzInsert(pz.tl.find(x => x.key === key)?.id);
     const e = pzEntryOf(side, key);
     if (!e) return;
@@ -3285,20 +3308,106 @@ function pzMove(key, toKey, after) {
     order.splice(0, order.length, ...next);
     pzChanged();
 }
+const pzTgtKey = () => `${pz.tgt.type}:${pz.tgt.name}`;
+const pzRadioOn = cat => !!cat && !!pz.tgt && (settings().pzRadio?.[pzTgtKey()] || []).includes(cat);
+
+function pzToggleRadio(cat) {
+    if (!cat || !pz.tgt) return;
+    const all = settings().pzRadio || (settings().pzRadio = {});
+    const k = pzTgtKey();
+    const list = all[k] || [];
+    all[k] = list.includes(cat) ? list.filter(x => x !== cat) : [...list, cat];
+    if (!all[k].length) delete all[k];
+    ctx().saveSettingsDebounced();
+    pzRenderList('tgt');
+    pzFitCards();
+    toastr.info(pzRadioOn(cat) ? `「${cat}」改成单选了：打开一条，同类的其他条会自动关掉` : `「${cat}」不再单选`);
+}
+
+function pzSetEnabled(e, on) {
+    if (pzIsWorld()) pz.tgt.data.entries[e.id].disable = !on;
+    else {
+        const order = pzOrder(pz.tgt.data).order;
+        const o = order.find(x => x.identifier === e.id);
+        if (o) o.enabled = on;
+        else if (on) order.push({ identifier: e.id, enabled: true });
+    }
+}
+
 function pzToggleEnabled(key) {
     const e = pz.tl.find(x => x.key === key);
     if (!e) return;
     pzPush();
-    if (pzIsWorld()) pz.tgt.data.entries[e.id].disable = e.enabled;
-    else {
-        const order = pzOrder(pz.tgt.data).order;
-        const o = order.find(x => x.identifier === e.id);
-        if (o) o.enabled = !e.enabled;
-        else order.push({ identifier: e.id, enabled: true });
+    const on = !e.enabled;
+    pzSetEnabled(e, on);
+    let off = 0;
+    if (on && !e.div && !e.end && pzRadioOn(e.cat)) {
+        pz.tl.filter(x => x !== e && x.cat === e.cat && x.enabled && !x.div && !x.end).forEach(x => {
+            pzSetEnabled(x, false);
+            off++;
+        });
     }
     pzChanged();
+    if (off) toastr.info(`单选分类：同类关掉了 ${off} 条`);
 }
-async function pzWrite(pm, name, preset) {
+
+const PZ_TOK_BATCH = 20;
+
+function pzTokOf(e) {
+    return e.marker ? null : pz.tokCache.get(e.content);
+}
+
+function pzTokTag(e, x) {
+    if (e.div && !x.flat) {
+        const list = pz.tl;
+        const i = list.indexOf(e);
+        const n = pzGroupSize(list, i);
+        const sum = [e, ...list.slice(i + 1, i + 1 + n)].filter(y => y.enabled).reduce((a, y) => a + (pzTokOf(y) || 0), 0);
+        return `<span class="rs_pz_tok">开启的共 ${sum.toLocaleString()}</span>`;
+    }
+    const n = pzTokOf(e);
+    return n == null ? '' : `<span class="rs_pz_tok">${n.toLocaleString()}</span>`;
+}
+
+async function pzCountTokens() {
+    const c = ctx();
+    const count = c.getTokenCountAsync || (t => Promise.resolve(Math.ceil(t.length / 2)));
+    const todo = [...new Set(pz.tl.filter(e => !e.marker).map(e => e.content))].filter(t => !pz.tokCache.has(t));
+    if (!todo.length) return false;
+    for (let i = 0; i < todo.length; i += PZ_TOK_BATCH) {
+        const part = todo.slice(i, i + PZ_TOK_BATCH);
+        const ns = await Promise.all(part.map(t => count(t).catch(() => 0)));
+        part.forEach((t, j) => pz.tokCache.set(t, Number(ns[j]) || 0));
+        if (pz.tokOn) $('#rs_panel .rs_pz_tokbar').text(`正在统计 token……${Math.min(i + PZ_TOK_BATCH, todo.length)}/${todo.length}`);
+    }
+    return true;
+}
+
+function pzTokSummary() {
+    const on = pz.tl.filter(e => e.enabled && !e.marker);
+    const sum = l => l.reduce((a, e) => a + (pzTokOf(e) || 0), 0);
+    return `已开启 ${on.length} 条，共 ${sum(on).toLocaleString()} token（全部 ${sum(pz.tl.filter(e => !e.marker)).toLocaleString()}）`;
+}
+
+async function pzRefreshTok() {
+    if (!pz.tokOn) return;
+    if (await pzCountTokens()) {
+        pzRenderList('tgt');
+        pzFitCards();
+    }
+    $('#rs_panel .rs_pz_tokbar').text(pzTokSummary());
+}
+
+async function pzToggleTok() {
+    pz.tokOn = !pz.tokOn;
+    $('#rs_panel .rs_pz_tokbtn').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_tokbar').toggleClass('rs_on', pz.tokOn).text('正在统计 token……');
+    $('#rs_panel .rs_pz_tokopts').toggleClass('rs_on', pz.tokOn);
+    $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokOn && !!pz.tokSort);
+    pzRenderList('tgt');
+    pzFitCards();
+    await pzRefreshTok();
+}async function pzWrite(pm, name, preset) {
     const res = await fetch('/api/presets/save', {
         method: 'POST',
         headers: ctx().getRequestHeaders(),
@@ -3456,6 +3565,79 @@ function pzDiffHtml(a, b, hk) {
 function pzPrompt(id) {
     return pzIsWorld() ? pz.tgt.data.entries[id] : pz.tgt.data.prompts.find(p => p.identifier === id);
 }
+function pzSchemes() {
+    const all = settings().pzSchemes || (settings().pzSchemes = {});
+    return all[pz.tgt.name] || (all[pz.tgt.name] = []);
+}
+
+function pzOnIds() {
+    return pzOrder(pz.tgt.data).order.filter(o => o.enabled).map(o => o.identifier);
+}
+
+function pzOpenSch(on) {
+    pz.sch = on && !!pz.tgt && !pzIsWorld();
+    $('#rs_panel .rs_pz').toggleClass('rs_pz_sching', pz.sch);
+    if (pz.sch) pzRenderSch();
+}
+
+function pzRenderSch() {
+    const list = pzSchemes();
+    const cur = pzOnIds().sort().join('\n');
+    $('#rs_panel .rs_pz_sch_title').text(`开关方案 · ${pz.tgt.name}`);
+    $('#rs_panel .rs_pz_sch_list').html(list.length ? list.map((x, i) => {
+        const now = [...x.on].sort().join('\n') === cur;
+        return `<div class="rs_pz_row rs_pz_sch_row${now ? ' rs_pz_sel' : ''}" data-i="${i}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(x.name)}</span>${now ? '<span class="rs_pz_tag rs_pz_same">正在用</span>' : ''}</div><div class="rs_pz_pv">开 ${x.on.length} 条</div></div><span class="rs_pz_card_btn" data-a="upd">更新</span><span class="rs_pz_card_btn" data-a="ren">改名</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除</span></div>`;
+    }).join('') : '<div class="rs_empty">还没有方案。先在目标里把条目开关调好，再点上面的按钮存成方案。</div>');
+}
+
+async function pzSchAct(i, a) {
+    const list = pzSchemes();
+    const x = list[i];
+    if (!x) return;
+    if (a === 'del') {
+        if (!(await askConfirm(`删除方案「${x.name}」？`))) return;
+        list.splice(i, 1);
+    } else if (a === 'upd') {
+        if (!(await askConfirm(`用现在的开关状态覆盖方案「${x.name}」？`))) return;
+        x.on = pzOnIds();
+    } else if (a === 'ren') {
+        const name = await pzAskText('新名字', x.name);
+        if (!name) return;
+        x.name = name;
+    } else return pzApplySch(x);
+    ctx().saveSettingsDebounced();
+    pzRenderSch();
+}
+
+async function pzAskText(title, value = '') {
+    const c = ctx();
+    if (typeof c.callGenericPopup === 'function') {
+        const r = await c.callGenericPopup(title, c.POPUP_TYPE?.INPUT ?? 3, value);
+        return typeof r === 'string' ? r.trim() : '';
+    }
+    return String(prompt(title, value) ?? '').trim();
+}
+
+async function pzNewSch() {
+    const name = await pzAskText('方案名字', `方案 ${pzSchemes().length + 1}`);
+    if (!name) return;
+    pzSchemes().push({ name, on: pzOnIds() });
+    ctx().saveSettingsDebounced();
+    pzRenderSch();
+    toastr.success(`存好了「${name}」`);
+}
+
+async function pzApplySch(x) {
+    const wasDirty = pz.tgt.dirty;
+    const set = new Set(x.on);
+    pzPush();
+    pzOrder(pz.tgt.data).order.forEach(o => { o.enabled = set.has(o.identifier); });
+    pzChanged();
+    pzOpenSch(false);
+    if (wasDirty) return toastr.info(`换成了「${x.name}」，还有别的改动没保存，记得点保存`);
+    await pzSave();
+}
+
 async function pzChangeTarget(name, type = pz.tgt?.type || 'p') {
     if (pz.tgt?.dirty && !(await askConfirm(`「${pz.tgt.name}」还有改动没保存，切换会丢掉，继续吗？`))) {
         await pzFillSelects();
@@ -3480,6 +3662,9 @@ function pzReset() {
     if (!pz.src?.v.startsWith('f:')) pz.src = null;
     pz.sel.clear();
     pz.open.clear();
+    pz.tokOn = false;
+    pz.tokSort = false;
+    pz.sch = false;
     pz.hunks = {};
     pz.picking = false;
     pz.pos = 'end';
@@ -4086,6 +4271,21 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_pz_all', pzSelectAll)
         .on('click', '#rs_panel .rs_pz_foldall', function () { pzFoldAll(this.dataset.side); })
+        .on('click', '#rs_panel .rs_pz_tokbtn', pzToggleTok)
+        .on('click', '#rs_panel .rs_pz_toksort', function () {
+            pz.tokSort = !pz.tokSort;
+            $(this).toggleClass('rs_on', pz.tokSort);
+            $('#rs_panel .rs_pz_tgt_list').toggleClass('rs_pz_toksorted', pz.tokSort);
+            pzRenderList('tgt');
+            pzFitCards();
+        })
+        .on('click', '#rs_panel .rs_pz_schbtn', () => pzOpenSch(true))
+        .on('click', '#rs_panel .rs_pz_sch_close', () => pzOpenSch(false))
+        .on('click', '#rs_panel .rs_pz_sch_new', pzNewSch)
+        .on('click', '#rs_panel .rs_pz_sch_row', function (e) {
+            const b = $(e.target).closest('.rs_pz_card_btn')[0];
+            pzSchAct(Number(this.dataset.i), b ? b.dataset.a : 'apply');
+        })
         .on('click', '#rs_panel .rs_pz_cats .rs_chip', function () {
             const side = this.parentElement.dataset.side;
             pz.catf[side] = this.dataset.c;
