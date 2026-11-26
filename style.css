@@ -2264,3 +2264,29 @@
 #rs_panel .rs_shelf_chat .rs_pz_pv + .rs_pz_pv {
     opacity: 0.5;
 }
+
+#rs_panel .rs_crop_frame {
+    position: relative;
+    align-self: center;
+    overflow: hidden;
+    border-radius: 8px;
+    background: #000;
+    touch-action: none;
+    cursor: grab;
+}
+
+#rs_panel .rs_crop_img {
+    position: absolute;
+    left: 0;
+    top: 0;
+    max-width: none;
+    transform-origin: 0 0;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#rs_panel .rs_crop_zoom {
+    width: 100%;
+    accent-color: var(--rs-accent);
+}

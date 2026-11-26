@@ -1966,6 +1966,7 @@ function ensureShell() {
       <div class="rs_shelf_grid"></div>
       <div class="rs_bar rs_shelf_bulk"><span class="rs_pz_card_btn" data-b="all">全选</span><span class="rs_shelf_bcount"></span><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn" data-b="move">移动</span><span class="rs_pz_card_btn rs_pz_card_del" data-b="del">删除</span><span class="rs_pz_card_btn" data-b="more">更多</span></div>
       <div class="rs_shelf_sheet"></div>
+      <input type="file" class="rs_shelf_file" accept="image/*" hidden>
     </div>
     <div class="rs_bin"></div>
     <div class="rs_rx">
@@ -4500,11 +4501,14 @@ const SHELF_UNTAGGED = '@none';
 const SHELF_DOTS = '<span class="rs_shelf_dots" title="更多操作">···</span>';
 const SHELF_HOLD = 450;
 
-const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null, menuFolder: null, chatsOf: null, chats: null, menuChat: null };
+const shelf = { kind: '', tab: 'all', folder: null, view: 'grid', selMode: false, sel: new Set(), tagFor: [], moveFrom: null, menuFolder: null, chatsOf: null, chats: null, menuChat: null, bust: {} };
 
 function shelfThumb(kind, id) {
     const c = ctx();
-    try { return c.getThumbnailUrl(kind === 'char' ? 'avatar' : 'persona', id); } catch { return kind === 'char' ? `/characters/${encodeURIComponent(id)}` : `/User Avatars/${encodeURIComponent(id)}`; }
+    let url;
+    try { url = c.getThumbnailUrl(kind === 'char' ? 'avatar' : 'persona', id); } catch { url = kind === 'char' ? `/characters/${encodeURIComponent(id)}` : `/User Avatars/${encodeURIComponent(id)}`; }
+    const t = shelf.bust?.[id];
+    return t && !url.startsWith('data:') ? `${url}${url.includes('?') ? '&' : '?'}t=${t}` : url;
 }
 
 function shelfPersonaMeta() {
@@ -4788,6 +4792,7 @@ async function shelfMore(solo) {
     ${btn('dup', '复制一份')}
     ${btn('fav', allFav ? '取消收藏' : '收藏')}
     ${one ? btn('ren', '改名') : ''}
+    ${one ? btn('avatar', '换头像') : ''}
     ${ch ? btn('tags', '加减标签') : ''}
     ${solo ? btn('multi', '多选') : ''}
     ${btn('del', '删除', ' rs_shelf_danger')}
@@ -5094,6 +5099,105 @@ async function shelfDelete(ids) {
     toastr[n === items.length ? 'success' : 'warning'](`删掉了 ${n} 个${n < items.length ? `，${items.length - n} 个没删成` : ''}`);
 }
 
+const CROP_W = 200;
+const CROP_H = 300;
+const CROP_ZOOM_MAX = 4;
+const crop = { id: null, file: null, url: '', nw: 0, nh: 0, zoom: 1, ox: 0, oy: 0, drag: null };
+
+function cropScale() {
+    return Math.max(CROP_W / crop.nw, CROP_H / crop.nh) * crop.zoom;
+}
+
+function cropClamp() {
+    const s = cropScale();
+    crop.ox = Math.min(0, Math.max(CROP_W - crop.nw * s, crop.ox));
+    crop.oy = Math.min(0, Math.max(CROP_H - crop.nh * s, crop.oy));
+}
+
+function cropPaint() {
+    const s = cropScale();
+    cropClamp();
+    $('#rs_panel .rs_crop_img').css({ width: crop.nw * s + 'px', height: crop.nh * s + 'px', transform: `translate(${crop.ox}px, ${crop.oy}px)` });
+}
+
+function cropZoom(z) {
+    const s0 = cropScale();
+    const cx = (CROP_W / 2 - crop.ox) / s0;
+    const cy = (CROP_H / 2 - crop.oy) / s0;
+    crop.zoom = Math.min(CROP_ZOOM_MAX, Math.max(1, z));
+    const s = cropScale();
+    crop.ox = CROP_W / 2 - cx * s;
+    crop.oy = CROP_H / 2 - cy * s;
+    cropPaint();
+}
+
+async function cropStart(file) {
+    if (!file || !shelf.sel.size) return;
+    URL.revokeObjectURL(crop.url);
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    try {
+        await new Promise((ok, bad) => {
+            img.onload = ok;
+            img.onerror = bad;
+            img.src = url;
+        });
+    } catch {
+        return toastr.error('这张图读不出来');
+    }
+    Object.assign(crop, { id: [...shelf.sel][0], file, url, nw: img.naturalWidth, nh: img.naturalHeight, zoom: 1 });
+    const s = cropScale();
+    crop.ox = (CROP_W - crop.nw * s) / 2;
+    crop.oy = (CROP_H - crop.nh * s) / 2;
+    $('#rs_panel .rs_shelf_sheet').addClass('rs_on').html(`
+<div class="rs_shelf_sheet_in">
+  <div class="rs_shelf_sheet_top"><div><b>换头像</b><div class="rs_pz_pv">拖动图片调整位置，滑块放大缩小</div></div></div>
+  <div class="rs_crop_frame" style="width:${CROP_W}px;height:${CROP_H}px"><img class="rs_crop_img" src="${url}" alt=""></div>
+  <input type="range" class="rs_crop_zoom" min="1" max="${CROP_ZOOM_MAX}" step="0.01" value="1">
+  <div class="rs_shelf_acts">
+    <div class="rs_shelf_act" data-crop="again">换一张图</div>
+    <div class="rs_shelf_act" data-crop="ok">确定</div>
+    <div class="rs_shelf_act rs_shelf_cancel" data-a="close">取消</div>
+  </div>
+</div>`);
+    cropPaint();
+}
+
+async function cropSave() {
+    const c = ctx();
+    const s = cropScale();
+    const box = { x: Math.round(-crop.ox / s), y: Math.round(-crop.oy / s), width: Math.round(CROP_W / s), height: Math.round(CROP_H / s) };
+    const q = `?crop=${encodeURIComponent(JSON.stringify(box))}`;
+    const form = new FormData();
+    form.append('avatar', crop.file, crop.file.name || 'avatar.png');
+    let res;
+    if (shelf.kind === 'char') {
+        form.append('avatar_url', crop.id);
+        res = await formPost(`/api/characters/edit-avatar${q}`, form);
+    } else {
+        form.append('overwrite_name', crop.id);
+        res = await formPost(`/api/avatars/upload${q}`, form);
+    }
+    if (!res?.ok) return toastr.error('换头像失败');
+    const urls = [shelfThumb(shelf.kind, crop.id), shelf.kind === 'char' ? `/characters/${encodeURIComponent(crop.id)}` : `/User Avatars/${encodeURIComponent(crop.id)}`];
+    await Promise.all(urls.map(u => fetch(u, { cache: 'reload' }).catch(() => null)));
+    shelf.bust[crop.id] = Date.now();
+    if (shelf.kind === 'char') {
+        await c.getCharacters();
+        const enc = encodeURIComponent(crop.id);
+        $('img').filter(function () { return this.src.includes(enc) || this.src.includes(crop.id); }).each(function () {
+            const u = new URL(this.src, location.href);
+            u.searchParams.set('t', String(Date.now()));
+            this.src = u.href;
+        });
+    } else await personaRefresh();
+    URL.revokeObjectURL(crop.url);
+    shelfCloseSheet();
+    if (!shelf.selMode) shelf.sel.clear();
+    await shelfRender();
+    toastr.success('头像换好了');
+}
+
 async function shelfEdit(id) {
     shelfClose();
     await switchTarget(() => (shelf.kind === 'char' ? charTarget('description', id) : personaTarget(id)));
@@ -5106,6 +5210,7 @@ async function shelfAct(a) {
     const done = () => {
         if (!shelf.selMode) shelf.sel.clear();
     };
+    if (a === 'avatar') return $('#rs_panel .rs_shelf_file').val('').trigger('click');
     if (a === 'close' || !id) {
         shelfCloseSheet();
         done();
@@ -5288,6 +5393,24 @@ function bindPanelEvents() {
             else shelfChatAct('open', fid);
         })
         .on('click', '#rs_panel .rs_shelf_act[data-c]', function () { shelfChatAct(this.dataset.c, shelf.menuChat); })
+        .on('change', '#rs_panel .rs_shelf_file', function () { cropStart(this.files?.[0]); })
+        .on('click', '#rs_panel .rs_shelf_act[data-crop]', function () {
+            if (this.dataset.crop === 'again') $('#rs_panel .rs_shelf_file').val('').trigger('click');
+            else cropSave();
+        })
+        .on('input', '#rs_panel .rs_crop_zoom', function () { cropZoom(Number(this.value)); })
+        .on('pointerdown', '#rs_panel .rs_crop_frame', function (e) {
+            e.preventDefault();
+            crop.drag = { x: e.originalEvent.clientX, y: e.originalEvent.clientY, ox: crop.ox, oy: crop.oy };
+            this.setPointerCapture?.(e.originalEvent.pointerId);
+        })
+        .on('pointermove', '#rs_panel .rs_crop_frame', e => {
+            if (!crop.drag) return;
+            crop.ox = crop.drag.ox + e.originalEvent.clientX - crop.drag.x;
+            crop.oy = crop.drag.oy + e.originalEvent.clientY - crop.drag.y;
+            cropPaint();
+        })
+        .on('pointerup pointercancel', '#rs_panel .rs_crop_frame', () => { crop.drag = null; })
         .on('click', '#rs_panel .rs_shelf_chatsback', async () => {
             shelf.chatsOf = null;
             $('#rs_panel .rs_shelf_q').val('');
@@ -5684,20 +5807,39 @@ function setBallVisible(on) {
     renderBall();
 }
 
+let selLock = null;
+
+function selRelease(chat) {
+    selLock?.classList.remove('rs_sel_mes');
+    selLock = null;
+    chat?.classList.remove('rs_selecting');
+}
+
 function guardSelection() {
     const chat = document.getElementById('chat');
     if (!chat) return;
     const sel = window.getSelection();
-    const node = sel?.anchorNode;
-    const el = node && (node.nodeType === 1 ? node : node.parentElement);
-    const mes = settings().selectGuard && sel.rangeCount && !sel.isCollapsed ? el?.closest?.('#chat .mes') : null;
-    const cur = chat.querySelector('.mes.rs_sel_mes');
-    if (mes === cur) return;
-    cur?.classList.remove('rs_sel_mes');
-    mes?.classList.add('rs_sel_mes');
-    chat.classList.toggle('rs_selecting', !!mes);
+    if (!settings().selectGuard || !sel?.rangeCount || sel.isCollapsed) return selRelease(chat);
+    if (!selLock || !selLock.isConnected) {
+        const node = sel.anchorNode;
+        const mes = (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('#chat .mes');
+        if (!mes) return selRelease(chat);
+        selLock = mes;
+        mes.classList.add('rs_sel_mes');
+        chat.classList.add('rs_selecting');
+    }
+    const box = selLock.querySelector('.mes_text') || selLock;
+    const r = sel.getRangeAt(0);
+    if (box.contains(r.startContainer) && box.contains(r.endContainer)) return;
+    const full = document.createRange();
+    full.selectNodeContents(box);
+    const nr = r.cloneRange();
+    if (r.compareBoundaryPoints(Range.START_TO_START, full) < 0) nr.setStart(full.startContainer, full.startOffset);
+    if (r.compareBoundaryPoints(Range.END_TO_END, full) > 0) nr.setEnd(full.endContainer, full.endOffset);
+    if (nr.collapsed || nr.compareBoundaryPoints(Range.START_TO_END, full) < 0 || nr.compareBoundaryPoints(Range.END_TO_START, full) > 0) return;
+    sel.removeAllRanges();
+    sel.addRange(nr);
 }
-
 function addWandMenu() {
     const $menu = $('#extensionsMenu');
     if (!$menu.length || $('#rs_wand_open').length) return;
