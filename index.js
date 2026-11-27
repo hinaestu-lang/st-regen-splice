@@ -4326,8 +4326,17 @@ function rxOpenEd(id) {
   <div class="rs_rx_lb">查找</div>
   <textarea class="rs_rx_f rs_rx_code" data-f="findRegex" rows="2" spellcheck="false" placeholder="/表达式/标志，比如 /<think>[\\s\\S]*?<\\/think>/g"></textarea>
   <div class="rs_rx_err"></div>
-  <div class="rs_rx_lb">替换为</div>
-  <textarea class="rs_rx_f rs_rx_code" data-f="replaceString" rows="3" spellcheck="false" placeholder="留空就是删掉；{{match}} 或 $1 引用匹配内容"></textarea>
+  <div class="rs_rx_rep">
+    <div class="rs_rx_lb rs_rx_lbrow"><span>替换为</span><span class="rs_bar_spacer"></span>
+      <span class="rs_icon rs_rx_tool fa-solid fa-rotate-left rs_off" data-t="undo" title="撤销"></span>
+      <span class="rs_chip rs_rx_tool" data-t="find"><i class="fa-solid fa-magnifying-glass"></i></span>
+      <span class="rs_chip rs_rx_tool" data-t="img">图片<span class="rs_rx_n"></span></span>
+      <span class="rs_chip rs_rx_tool" data-t="color">颜色<span class="rs_rx_n"></span></span>
+      <span class="rs_icon rs_rx_tool fa-solid fa-expand" data-t="full" title="放大"></span>
+    </div>
+    <div class="rs_rx_tbox"></div>
+    <div class="rs_rx_repwrap"><div class="rs_rx_hl rs_rx_code"></div><textarea class="rs_rx_f rs_rx_code rs_rx_reptext" data-f="replaceString" rows="3" spellcheck="false" placeholder="留空就是删掉；{{match}} 或 $1 引用匹配内容"></textarea></div>
+  </div>
   <div class="rs_rx_lb">修剪掉</div>
   <textarea class="rs_rx_f rs_rx_code" data-f="trimStrings" rows="2" spellcheck="false" placeholder="一行一个，替换前从匹配内容里去掉"></textarea>
   <div class="rs_rx_lb">作用于</div>
@@ -4354,11 +4363,236 @@ function rxOpenEd(id) {
         this.value = f === 'trimStrings' ? (v || []).join('\n') : f === 'substituteRegex' ? String(Number(v) || 0) : v ?? '';
     });
     $('#rs_panel .rs_rx').addClass('rs_rx_editing');
+    Object.assign(rt, { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] });
+    $('#rs_panel .rs_rx_ed').removeClass('rs_rx_full');
     rxTest();
+    rtRefresh();
+}
+
+const rt = { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] };
+const RT_IMG = /https?:\/\/[^\s"'`<>()\\]+/g;
+const RT_COLOR = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])|\b(?:rgba?|hsla?)\([^()]*\)/g;
+const rtTa = () => $('#rs_panel .rs_rx_reptext')[0];
+
+function rtImgHits(text) {
+    const out = [];
+    for (const m of text.matchAll(RT_IMG)) {
+        const u = m[0].replace(/[.,;:!?]+$/, '');
+        const before = text.slice(Math.max(0, m.index - 12), m.index);
+        if (/\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)(?:[?#]|$)/i.test(u) || /(?:url\(\s*["']?|src\s*=\s*["']?)$/i.test(before)) out.push({ s: u, i: m.index });
+    }
+    return out;
+}
+
+const rtColorHits = text => [...text.matchAll(RT_COLOR)].map(m => ({ s: m[0], i: m.index }));
+
+function rtGroup(hits) {
+    const map = new Map();
+    hits.forEach((h, n) => {
+        if (!map.has(h.s)) map.set(h.s, []);
+        map.get(h.s).push(n);
+    });
+    return [...map].map(([s, ords]) => ({ s, ords }));
+}
+
+function rtSwap(text, hits, ords, to) {
+    const set = new Set(ords);
+    let out = '';
+    let last = 0;
+    hits.forEach((h, n) => {
+        if (!set.has(n)) return;
+        out += text.slice(last, h.i) + to;
+        last = h.i + h.s.length;
+    });
+    return out + text.slice(last);
+}
+
+function rtSet(v, noUndo) {
+    const ta = rtTa();
+    if (!ta || ta.value === v) return;
+    if (!noUndo) rt.undo.push(ta.value);
+    if (rt.undo.length > 50) rt.undo.shift();
+    ta.value = v;
+    rxTest();
+    rtRefresh();
+}
+
+let rtCanvas = null;
+
+function rtParse(str) {
+    rtCanvas = rtCanvas || document.createElement('canvas').getContext('2d');
+    rtCanvas.fillStyle = '#010203';
+    rtCanvas.fillStyle = str;
+    const n = String(rtCanvas.fillStyle);
+    if (n === '#010203' && !/^#010203$/i.test(str)) return null;
+    if (n.startsWith('#')) return { r: parseInt(n.slice(1, 3), 16), g: parseInt(n.slice(3, 5), 16), b: parseInt(n.slice(5, 7), 16), a: 1 };
+    const v = n.match(/[\d.]+/g)?.map(Number) || [];
+    return { r: v[0] || 0, g: v[1] || 0, b: v[2] || 0, a: v[3] ?? 1 };
+}
+
+const rtHex = n => Math.round(n).toString(16).padStart(2, '0');
+
+function rtFormat(kind, c) {
+    if (kind === 'hex') return `#${rtHex(c.r)}${rtHex(c.g)}${rtHex(c.b)}${c.a < 1 ? rtHex(c.a * 255) : ''}`;
+    return c.a < 1 ? `rgba(${c.r}, ${c.g}, ${c.b}, ${+c.a.toFixed(2)})` : `rgb(${c.r}, ${c.g}, ${c.b})`;
+}
+
+function rtRefresh() {
+    const ta = rtTa();
+    if (!ta) return;
+    const text = ta.value;
+    rt.imgs = rtGroup(rtImgHits(text));
+    rt.cols = rtGroup(rtColorHits(text)).map(x => ({ ...x, c: rtParse(x.s) })).filter(x => x.c);
+    const $row = $('#rs_panel .rs_rx_lbrow');
+    $row.find('[data-t="img"] .rs_rx_n').text(rt.imgs.length ? ` ${rt.imgs.length}` : '');
+    $row.find('[data-t="color"] .rs_rx_n').text(rt.cols.length ? ` ${rt.cols.length}` : '');
+    $row.find('[data-t="undo"]').toggleClass('rs_off', !rt.undo.length);
+    $row.find('[data-t="full"]').toggleClass('fa-expand', !rt.full).toggleClass('fa-compress', rt.full);
+    $row.find('.rs_chip').each(function () { $(this).toggleClass('rs_on', rt.tool === this.dataset.t); });
+    if (rt.tool === 'find') rtFindRender(false);
+    else $('#rs_panel .rs_rx_hl').empty().hide();
+}
+
+function rtToolHtml() {
+    if (rt.tool === 'find') return `<div class="rs_rx_fb"><input type="text" class="rs_rx_fq" placeholder="查找"><span class="rs_rx_fn"></span><span class="rs_icon fa-solid fa-chevron-up rs_rx_fx" data-x="prev"></span><span class="rs_icon fa-solid fa-chevron-down rs_rx_fx" data-x="next"></span></div>
+<div class="rs_rx_fb"><input type="text" class="rs_rx_fr" placeholder="替换成"><span class="rs_chip rs_rx_fx" data-x="one">替换</span><span class="rs_chip rs_rx_fx" data-x="all">全部</span></div>`;
+    if (rt.tool === 'img') {
+        return rt.imgs.length ? rt.imgs.map((x, i) => `<div class="rs_rx_irow" data-i="${i}"><img class="rs_rx_ithumb" src="${escapeHtml(x.s)}" loading="lazy" referrerpolicy="no-referrer" alt=""><input type="url" class="rs_rx_iu" value="${escapeHtml(x.s)}"><span class="rs_rx_cnt">${x.ords.length > 1 ? `×${x.ords.length}` : ''}</span><span class="rs_icon fa-solid fa-paste rs_rx_ipaste" title="粘贴新链接"></span></div>`).join('')
+            : '<div class="rs_rx_none">没找到图片链接</div>';
+    }
+    if (rt.tool === 'color') {
+        return rt.cols.length ? rt.cols.map((x, i) => `<div class="rs_rx_crow" data-i="${i}"><label class="rs_rx_sw" style="--c:${escapeHtml(rtFormat('rgb', x.c))}"><input type="color" class="rs_rx_cin" value="${rtFormat('hex', { ...x.c, a: 1 })}"></label><code class="rs_rx_cs">${escapeHtml(x.s)}</code><span class="rs_rx_cnt">${x.ords.length > 1 ? `×${x.ords.length}` : ''}</span><input type="range" class="rs_rx_ca" min="0" max="100" value="${Math.round(x.c.a * 100)}" title="透明度"></div>`).join('')
+            : '<div class="rs_rx_none">没找到颜色</div>';
+    }
+    return '';
+}
+
+function rtTbox() {
+    $('#rs_panel .rs_rx_tbox').html(rtToolHtml()).find('.rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
+}
+
+function rtTool(t) {
+    if (t === 'undo') {
+        if (!rt.undo.length) return;
+        rtSet(rt.undo.pop(), true);
+        if (rt.tool !== 'find') rtTbox();
+        return;
+    }
+    if (t === 'full') {
+        rt.full = !rt.full;
+        $('#rs_panel .rs_rx_ed').toggleClass('rs_rx_full', rt.full);
+        return rtRefresh();
+    }
+    rt.tool = rt.tool === t ? null : t;
+    rt.fi = 0;
+    rtTbox();
+    rtRefresh();
+    if (rt.tool === 'find') $('#rs_panel .rs_rx_fq').trigger('focus');
+}
+
+function rtFindHits() {
+    const q = String($('#rs_panel .rs_rx_fq').val() || '').toLowerCase();
+    const text = rtTa()?.value.toLowerCase() || '';
+    const out = [];
+    if (!q) return out;
+    for (let i = text.indexOf(q); i >= 0; i = text.indexOf(q, i + q.length)) out.push({ i, n: q.length });
+    return out;
+}
+
+function rtFindRender(scroll) {
+    const ta = rtTa();
+    const hl = $('#rs_panel .rs_rx_hl')[0];
+    if (!ta || !hl) return;
+    const hits = rtFindHits();
+    if (rt.fi >= hits.length) rt.fi = Math.max(0, hits.length - 1);
+    $('#rs_panel .rs_rx_fn').text(hits.length ? `${rt.fi + 1}/${hits.length}` : String($('#rs_panel .rs_rx_fq').val() || '') ? '0' : '');
+    const text = ta.value;
+    let html = '';
+    let last = 0;
+    hits.forEach((h, k) => {
+        html += escapeHtml(text.slice(last, h.i)) + `<mark${k === rt.fi ? ' class="rs_cur"' : ''}>${escapeHtml(text.slice(h.i, h.i + h.n))}</mark>`;
+        last = h.i + h.n;
+    });
+    hl.innerHTML = html + escapeHtml(text.slice(last)) + '\n';
+    $(hl).toggle(hits.length > 0);
+    const cur = hl.querySelector('mark.rs_cur');
+    if (scroll && cur) ta.scrollTop = Math.max(0, cur.offsetTop - ta.clientHeight / 3);
+    hl.scrollTop = ta.scrollTop;
+}
+
+function rtFindAct(x) {
+    const hits = rtFindHits();
+    if (!hits.length) return;
+    if (x === 'prev' || x === 'next') {
+        rt.fi = (rt.fi + (x === 'next' ? 1 : -1) + hits.length) % hits.length;
+        return rtFindRender(true);
+    }
+    const to = String($('#rs_panel .rs_rx_fr').val() ?? '');
+    const text = rtTa().value;
+    const pick = x === 'all' ? hits : [hits[rt.fi]];
+    let out = '';
+    let last = 0;
+    pick.forEach(h => {
+        out += text.slice(last, h.i) + to;
+        last = h.i + h.n;
+    });
+    rtSet(out + text.slice(last));
+    if (x === 'all') toastr.success(`替换了 ${pick.length} 处，可以撤销`);
+    rtFindRender(true);
+}
+
+function rtImgSet(row, url) {
+    const x = rt.imgs[Number(row.dataset.i)];
+    url = String(url || '').trim();
+    if (!x || !url || url === x.s) return;
+    const text = rtTa().value;
+    rtSet(rtSwap(text, rtImgHits(text), x.ords, url));
+    rtTbox();
+}
+
+async function rtImgPaste(row) {
+    let t = '';
+    try { t = await navigator.clipboard.readText(); } catch { }
+    t = String(t || '').trim();
+    if (!/^https?:\/\//i.test(t)) return toastr.warning('剪贴板里不是链接');
+    rtImgSet(row, t);
+}
+
+function rtColorLive(row) {
+    const x = rt.cols[Number(row.dataset.i)];
+    if (!x) return;
+    const hex = $(row).find('.rs_rx_cin').val();
+    const a = Number($(row).find('.rs_rx_ca').val()) / 100;
+    const c = { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16), a };
+    const to = rtFormat(x.s.startsWith('#') ? 'hex' : 'rgb', c);
+    if (to === x.s) return;
+    const first = row.dataset.live !== '1';
+    row.dataset.live = '1';
+    const ta = rtTa();
+    const text = ta.value;
+    const next = rtSwap(text, rtColorHits(text), x.ords, to);
+    if (first) rt.undo.push(text);
+    ta.value = next;
+    x.s = to;
+    x.c = c;
+    $(row).find('.rs_rx_cs').text(to);
+    $(row).find('.rs_rx_sw').css('--c', rtFormat('rgb', c));
+    $('#rs_panel .rs_rx_lbrow [data-t="undo"]').removeClass('rs_off');
+    rxTest();
+}
+
+function rtColorDone(row) {
+    if (row.dataset.live !== '1') return;
+    row.dataset.live = '';
+    rtRefresh();
+    rtTbox();
 }
 
 function rxCloseEd() {
     rx.ed = null;
+    rt.tool = null;
+    rt.full = false;
+    $('#rs_panel .rs_rx_ed').removeClass('rs_rx_full');
     $('#rs_panel .rs_rx').removeClass('rs_rx_editing');
     $('#rs_panel .rs_rx_ed').empty();
 }
@@ -5667,11 +5901,37 @@ function bindPanelEvents() {
             rx.sel.clear();
             rxRender();
         })
-        .on('click', '#rs_panel .rs_rx_form .rs_chip', function () {
+        .on('click', '#rs_panel .rs_rx_form .rs_chips > .rs_chip', function () {
             $(this).toggleClass('rs_on');
             rxTest();
         })
         .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
+        .on('input', '#rs_panel .rs_rx_reptext', () => {
+            if (rt.tool === 'find') rtFindRender(false);
+        })
+        .on('change', '#rs_panel .rs_rx_reptext', () => {
+            rtRefresh();
+            if (rt.tool === 'img' || rt.tool === 'color') rtTbox();
+        })
+        .on('scroll', '#rs_panel .rs_rx_reptext', function () { $('#rs_panel .rs_rx_hl').scrollTop(this.scrollTop); })
+        .on('click', '#rs_panel .rs_rx_tool', function () { rtTool(this.dataset.t); })
+        .on('input', '#rs_panel .rs_rx_fq', () => {
+            rt.fi = 0;
+            rtFindRender(true);
+        })
+        .on('keydown', '#rs_panel .rs_rx_fq', e => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            rtFindAct(e.shiftKey ? 'prev' : 'next');
+        })
+        .on('click', '#rs_panel .rs_rx_fx', function () { rtFindAct(this.dataset.x); })
+        .on('change', '#rs_panel .rs_rx_iu', function () { rtImgSet(this.closest('.rs_rx_irow'), this.value); })
+        .on('keydown', '#rs_panel .rs_rx_iu', function (e) {
+            if (e.key === 'Enter') this.blur();
+        })
+        .on('click', '#rs_panel .rs_rx_ipaste', function () { rtImgPaste(this.closest('.rs_rx_irow')); })
+        .on('input', '#rs_panel .rs_rx_cin, #rs_panel .rs_rx_ca', function () { rtColorLive(this.closest('.rs_rx_crow')); })
+        .on('change', '#rs_panel .rs_rx_cin, #rs_panel .rs_rx_ca', function () { rtColorDone(this.closest('.rs_rx_crow')); })
         .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
         .on('change', '#rs_panel .rs_pz_tkind', function () { pzChangeTarget('', this.value); })
