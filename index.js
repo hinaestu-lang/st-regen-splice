@@ -1190,6 +1190,41 @@ const WI_DEL = '<span class="rs_icon rs_wi_delbook fa-solid fa-trash-can" title=
 
 const wfind = { all: false, seq: 0, timer: 0 };
 
+async function wiRemoveBook(book, data) {
+    data = data || await ctx().loadWorldInfo(book);
+    if (!data?.entries) return false;
+    await binAdd({ type: 'book', label: book, sub: `${Object.keys(data.entries).length} 个条目`, data: { name: book, data: structuredClone(data) } });
+    const wi = await pzWorldApi();
+    try {
+        return wi?.deleteWorldInfo ? !!(await wi.deleteWorldInfo(book)) : !!(await apiPost('/api/worldinfo/delete', { name: book }))?.ok;
+    } catch (e) {
+        console.error('[重生成拼接] 删除世界书失败', e);
+        return false;
+    }
+}
+
+async function wiOrphanBooks(gone) {
+    const c = ctx();
+    const wi = await pzWorldApi();
+    const lore = wi?.world_info?.charLore || [];
+    const goneNames = new Set(gone.map(x => x.avatar.replace(/\.[^.]+$/, '')));
+    const books = new Set();
+    for (const x of gone) {
+        if (x.world) books.add(x.world);
+        for (const b of lore.find(l => l.name === x.avatar.replace(/\.[^.]+$/, ''))?.extraBooks || []) books.add(b);
+    }
+    const { pu } = await personaInfo();
+    const used = new Set([
+        ...(c.characters || []).map(x => x?.data?.extensions?.world).filter(Boolean),
+        ...lore.filter(l => !goneNames.has(l.name)).flatMap(l => l.extraBooks || []),
+        ...(wi?.selected_world_info || []),
+        pu.persona_description_lorebook,
+        ...Object.values(pu.persona_descriptions || {}).map(d => d?.lorebook),
+    ].filter(Boolean));
+    const names = worldNames();
+    return [...books].filter(b => names.includes(b) && !used.has(b));
+}
+
 async function wiDeleteBook() {
     const book = state.target?.kind === 'world' ? state.target.book : null;
     if (!book) return;
@@ -1200,15 +1235,7 @@ async function wiDeleteBook() {
     const tip = users.length ? `\n还绑在 ${users.slice(0, 3).join('、')}${users.length > 3 ? ` 等 ${users.length} 张卡` : ''} 上，删了这些卡就用不到它了。` : '';
     if (!(await askConfirm(`删除世界书「${book}」（${n} 个条目）？会放进回收站，${BIN_DAYS} 天内能恢复。${tip}${isDirty() ? '\n当前条目没保存的改动也会丢掉。' : ''}`))) return;
     if (!data?.entries) return toastr.error('读不到这本世界书，没有删');
-    await binAdd({ type: 'book', label: book, sub: `${n} 个条目`, data: { name: book, data: structuredClone(data) } });
-    const wi = await pzWorldApi();
-    let ok = false;
-    try {
-        ok = wi?.deleteWorldInfo ? await wi.deleteWorldInfo(book) : !!(await apiPost('/api/worldinfo/delete', { name: book }))?.ok;
-    } catch (e) {
-        console.error('[重生成拼接] 删除世界书失败', e);
-    }
-    if (!ok) return toastr.error('没能删除');
+    if (!(await wiRemoveBook(book, data))) return toastr.error('没能删除');
     await syncLists(true);
     clearDraft();
     toastr.success(`已删除「${book}」，可在回收站恢复`);
@@ -5168,6 +5195,7 @@ async function shelfDelete(ids) {
     const tip = shelf.kind === 'char' ? '角色卡会放进回收站，但它的聊天记录会一起删掉，恢复后不会回来' : '人设会放进回收站';
     if (!(await askConfirm(`删除${items.length === 1 ? `「${items[0].name}」` : `${items.length} 个${what}`}？${tip}`))) return;
     let n = 0;
+    const gone = [];
     for (const x of items) {
         if (shelf.kind === 'char') {
             const card = await apiPost('/api/characters/export', { format: 'png', avatar_url: x.id });
@@ -5176,6 +5204,7 @@ async function shelfDelete(ids) {
             const res = await apiPost('/api/characters/delete', { avatar_url: x.id, delete_chats: true });
             if (!res?.ok) continue;
             delete c.tagMap[x.id];
+            gone.push({ avatar: x.id, world: c.characters.find(y => y.avatar === x.id)?.data?.extensions?.world || '' });
             n++;
         } else {
             const { pu } = await personaInfo();
@@ -5197,6 +5226,17 @@ async function shelfDelete(ids) {
     }
     ids.forEach(id => shelf.sel.delete(id));
     toastr[n === items.length ? 'success' : 'warning'](`删掉了 ${n} 个${n < items.length ? `，${items.length - n} 个没删成` : ''}`);
+    if (gone.length) await shelfDropBooks(gone);
+}
+
+async function shelfDropBooks(gone) {
+    const books = await wiOrphanBooks(gone);
+    if (!books.length) return;
+    if (!(await askConfirm(`${books.map(b => `「${b}」`).join('')}只给刚删的卡用，要一起删掉吗？会放进回收站，${BIN_DAYS} 天内能恢复`))) return;
+    let n = 0;
+    for (const b of books) if (await wiRemoveBook(b)) n++;
+    await syncLists(true);
+    toastr[n === books.length ? 'success' : 'warning'](`删掉了 ${n} 本世界书${n < books.length ? `，${books.length - n} 本没删成` : ''}`);
 }
 
 const CROP_W = 200;
