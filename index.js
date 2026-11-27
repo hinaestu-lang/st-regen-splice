@@ -384,7 +384,7 @@ function msgTarget(id) {
             ...floors,
         ],
         ref,
-        initial: parts.body,
+        initial: lf(parts.body),
         bodyOnly: !!(parts.pre || parts.post),
         saveLabel: '写回',
         closeAfterSave: true,
@@ -957,6 +957,8 @@ async function postCharUpdate(body) {
     if (!res?.ok) toastr.error('保存角色卡失败');
     return !!res?.ok;
 }
+const lf = v => String(v ?? '').replace(/\r\n?/g, '\n');
+
 async function savedTarget(key, initial, rest) {
     return { refs: await buildRefs(key, initial), key, ref: 0, initial, saveLabel: '保存', closeAfterSave: false, ...rest };
 }
@@ -1015,9 +1017,7 @@ async function charTarget(field = 'description', avatar = null) {
     if (!isAlt) field = def[0];
     else field = altIndex === alts.length ? 'alt:new' : `alt:${altIndex}`;
 
-    const initial = isAlt
-        ? String(alts[altIndex] ?? '')
-        : String((def[3] ? ch.data?.[def[0]] : ch[def[0]] ?? ch.data?.[def[0]]) ?? '');
+    const initial = lf(isAlt ? alts[altIndex] : (def[3] ? ch.data?.[def[0]] : ch[def[0]] ?? ch.data?.[def[0]]));
     const key = isAlt ? (field === 'alt:new' ? null : `char:${ch.avatar}:alt:${altIndex}`) : `char:${ch.avatar}:${def[0]}`;
 
     const preview = t => previewText(t, ALT_PREVIEW);
@@ -1087,7 +1087,7 @@ async function personaTarget(avatar = null) {
         return null;
     }
     const name = id ? (pu.personas?.[id] ?? c.name1) : c.name1;
-    const initial = String((isCur ? $('#persona_description').val() : pu.persona_descriptions?.[id]?.description) ?? '');
+    const initial = lf(isCur ? $('#persona_description').val() : pu.persona_descriptions?.[id]?.description);
     const key = id ? `persona:${id}` : `persona:${name}`;
     if (id && !list.some(x => x.id !== id && x.name === name)) await adoptSnaps(`persona:${name}`, key);
     return savedTarget(key, initial, {
@@ -1158,7 +1158,7 @@ async function worldTarget(book, uid) {
     const entryLabel = e => e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid}`;
     const entryOpts = entries.map(e =>
         `<option value="${e.uid}" ${e === entry ? 'selected' : ''}>${escapeHtml(entryLabel(e))}${e.disable ? '（已禁用）' : ''}</option>`).join('');
-    const initial = String(entry.content ?? '');
+    const initial = lf(entry.content);
     const key = `wi:${book}:${entry.uid}`;
 
     return savedTarget(key, initial, {
