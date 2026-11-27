@@ -255,14 +255,16 @@ async function idbGet(key) {
 async function idbPut(key, value) {
     try {
         const d = await db();
-        await new Promise(res => {
+        return await new Promise(res => {
             const tx = d.transaction('snaps', 'readwrite');
             tx.objectStore('snaps').put(value, key);
-            tx.oncomplete = res;
-            tx.onerror = res;
+            tx.oncomplete = () => res(true);
+            tx.onerror = () => res(false);
+            tx.onabort = () => res(false);
         });
     } catch (e) {
         console.warn('[重生成拼接] 存储失败', e);
+        return false;
     }
 }
 
@@ -280,8 +282,10 @@ async function binAll() {
 
 async function binAdd(items) {
     const list = (Array.isArray(items) ? items : [items]).map(x => ({ id: pzUid(), time: Date.now(), ...x }));
-    if (!list.length) return;
-    await idbPut(BIN_KEY, [...list, ...(await binAll())].slice(0, BIN_MAX));
+    if (!list.length) return true;
+    if (!(await idbPut(BIN_KEY, [...list, ...(await binAll())].slice(0, BIN_MAX)))) return false;
+    const have = new Set((await binAll()).map(x => x.id));
+    return list.every(x => have.has(x.id));
 }
 
 async function binDrop(ids) {
@@ -1193,7 +1197,10 @@ const wfind = { all: false, seq: 0, timer: 0 };
 async function wiRemoveBook(book, data) {
     data = data || await ctx().loadWorldInfo(book);
     if (!data?.entries) return false;
-    await binAdd({ type: 'book', label: book, sub: `${Object.keys(data.entries).length} 个条目`, data: { name: book, data: structuredClone(data) } });
+    if (!(await binAdd({ type: 'book', label: book, sub: `${Object.keys(data.entries).length} 个条目`, data: { name: book, data: structuredClone(data) } }))) {
+        toastr.error(`「${book}」没能放进回收站，为了安全没有删`);
+        return false;
+    }
     const wi = await pzWorldApi();
     try {
         return wi?.deleteWorldInfo ? !!(await wi.deleteWorldInfo(book)) : !!(await apiPost('/api/worldinfo/delete', { name: book }))?.ok;
@@ -1213,6 +1220,7 @@ async function wiOrphanBooks(gone) {
         if (x.world) books.add(x.world);
         for (const b of lore.find(l => l.name === x.avatar.replace(/\.[^.]+$/, ''))?.extraBooks || []) books.add(b);
     }
+    if ((c.characters || []).some(x => x?.avatar && !('world' in (x.data?.extensions || {})))) return [];
     const { pu } = await personaInfo();
     const used = new Set([
         ...(c.characters || []).map(x => x?.data?.extensions?.world).filter(Boolean),
@@ -5200,7 +5208,10 @@ async function shelfDelete(ids) {
         if (shelf.kind === 'char') {
             const card = await apiPost('/api/characters/export', { format: 'png', avatar_url: x.id });
             const blob = card?.ok ? await card.blob() : null;
-            if (blob) await binAdd({ type: 'card', label: x.name, sub: '角色卡', data: { avatar: x.id, blob, tags: c.tagMap[x.id] || [] } });
+            if (!blob || !(await binAdd({ type: 'card', label: x.name, sub: '角色卡', data: { avatar: x.id, blob, tags: c.tagMap[x.id] || [] } }))) {
+                toastr.error(`「${x.name}」没能备份进回收站，为了安全没有删`);
+                continue;
+            }
             const res = await apiPost('/api/characters/delete', { avatar_url: x.id, delete_chats: true });
             if (!res?.ok) continue;
             delete c.tagMap[x.id];
@@ -5210,7 +5221,10 @@ async function shelfDelete(ids) {
             const { pu } = await personaInfo();
             const img = await fetch(`/User Avatars/${encodeURIComponent(x.id)}`).then(r => (r.ok ? r.blob() : null)).catch(() => null);
             const meta = shelfPersonaMeta();
-            await binAdd({ type: 'persona', label: x.name, sub: '用户人设', data: { avatar: x.id, blob: img, name: x.name, desc: pu.persona_descriptions?.[x.id] ?? null, fav: meta.personaFav.includes(x.id) } });
+            if (!(await binAdd({ type: 'persona', label: x.name, sub: '用户人设', data: { avatar: x.id, blob: img, name: x.name, desc: pu.persona_descriptions?.[x.id] ?? null, fav: meta.personaFav.includes(x.id) } }))) {
+                toastr.error(`「${x.name}」没能备份进回收站，为了安全没有删`);
+                continue;
+            }
             const res = await apiPost('/api/avatars/delete', { avatar: x.id });
             if (!res?.ok) continue;
             delete pu.personas[x.id];
@@ -6178,7 +6192,10 @@ async function chatGet(x) {
 async function ccRemove(x) {
     const body = await chatGet(x);
     if (Array.isArray(body) && body.length > 1) {
-        await binAdd({ type: 'chat', label: x.file_id, sub: `${x.owner} · ${body.length - 1} 条`, data: { group: x.group || null, avatar: x.avatar || null, owner: x.owner, file_id: x.file_id, chat: body } });
+        if (!(await binAdd({ type: 'chat', label: x.file_id, sub: `${x.owner} · ${body.length - 1} 条`, data: { group: x.group || null, avatar: x.avatar || null, owner: x.owner, file_id: x.file_id, chat: body } }))) {
+            toastr.error(`「${x.file_id}」没能备份进回收站，为了安全没有删`);
+            return false;
+        }
     }
     const first = await chatApi('delete', x);
     if (first?.ok) return true;
