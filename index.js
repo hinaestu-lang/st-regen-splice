@@ -1955,10 +1955,15 @@ function syncBackScroll() {
     if (ta && back) back.scrollTop = ta.scrollTop;
 }
 
+const BACK_LONG = 6000;
+const BACK_LONG_WAIT = 220;
 let backRaf = 0;
+let backTimer = 0;
 function scheduleBack() {
     cancelAnimationFrame(backRaf);
-    backRaf = requestAnimationFrame(afterEdit);
+    clearTimeout(backTimer);
+    if ((bodyEl()?.value.length || 0) > BACK_LONG) backTimer = setTimeout(afterEdit, BACK_LONG_WAIT);
+    else backRaf = requestAnimationFrame(afterEdit);
 }
 
 const state = {
@@ -2604,6 +2609,8 @@ async function closePanel(force = false, keepDraft = false) {
     else clearDraft();
     clearTimeout(state.typingTimer);
     clearTimeout(state.diffTimer);
+    clearTimeout(backTimer);
+    cancelAnimationFrame(backRaf);
     state.target = null;
     window.visualViewport?.removeEventListener('resize', fitToViewport);
     window.visualViewport?.removeEventListener('scroll', fitToViewport);
@@ -4949,20 +4956,20 @@ function favChatLabel() {
     return [who || c.name2, favChatId()].filter(Boolean).join(' · ');
 }
 
+const favMatch = (f, m, i) => !!m && favDate(m) === f.date && (m.name || '') === f.name && (i === f.mesid || !!f.date);
+
 function favLive(f) {
     const chat = ctx().chat || [];
     if (f.chat !== favChatId()) return null;
-    const same = (m, i) => m && favDate(m) === f.date && (m.name || '') === f.name && (i === f.mesid || f.date);
-    if (same(chat[f.mesid], f.mesid)) return { i: f.mesid, m: chat[f.mesid] };
-    const i = f.date ? chat.findIndex((m, k) => same(m, k)) : -1;
+    if (favMatch(f, chat[f.mesid], f.mesid)) return { i: f.mesid, m: chat[f.mesid] };
+    const i = f.date ? chat.findIndex((m, k) => favMatch(f, m, k)) : -1;
     return i >= 0 ? { i, m: chat[i] } : null;
 }
 
 async function favFind(id) {
-    const c = ctx();
-    const m = c.chat?.[id];
+    const m = ctx().chat?.[id];
     const chat = favChatId();
-    return m ? (await favAll()).find(f => f.chat === chat && f.date === favDate(m) && (f.name === (m.name || '')) && (f.mesid === id || f.date)) || null : null;
+    return m ? (await favAll()).find(f => f.chat === chat && favMatch(f, m, id)) || null : null;
 }
 
 async function favRemove(f) {
@@ -5002,7 +5009,7 @@ async function favMarks() {
     document.querySelectorAll('#chat .mes[mesid]').forEach(el => {
         const i = Number(el.getAttribute('mesid'));
         const m = c.chat?.[i];
-        const on = !!m && list.some(f => f.date === favDate(m) && f.name === (m.name || '') && (f.mesid === i || f.date));
+        const on = list.some(f => favMatch(f, m, i));
         el.classList.toggle('rs_faved', on);
         el.querySelectorAll('.rs_fav_btn').forEach(b => {
             b.classList.toggle('fa-solid', on);
