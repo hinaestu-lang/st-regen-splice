@@ -2602,3 +2602,69 @@
 body:has(#rs_overlay) #rs_jump {
     display: none;
 }
+
+#rs_panel.rs_mode_fav > :not(.rs_top):not(.rs_fav) {
+    display: none !important;
+}
+
+#rs_panel .rs_fav {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+}
+
+#rs_panel.rs_mode_fav .rs_fav {
+    display: flex;
+}
+
+#rs_panel .rs_fav_row {
+    cursor: pointer;
+}
+
+#rs_panel .rs_fav_head .rs_bar_title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#rs_panel .rs_fav_act[data-a="del"] {
+    color: var(--rs-accent);
+}
+
+#rs_panel .rs_fav_note {
+    padding: 6px 14px;
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+#rs_panel .rs_fav_read {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 14px 24px;
+}
+
+#rs_panel .rs_fav_text {
+    font-size: var(--rs-font, inherit);
+    line-height: 1.7;
+    overflow-wrap: anywhere;
+}
+
+#rs_panel .rs_fav_raw {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+#chat .mes.rs_faved .ch_name .name_text::after {
+    content: '\f02e';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    margin-left: 6px;
+    font-size: 0.75em;
+    color: var(--SmartThemeQuoteColor);
+}

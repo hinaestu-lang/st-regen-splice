@@ -141,7 +141,7 @@ function refreshSwipeUI(id, msg) {
     }
 }
 
-const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div>';
+const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div><div title="收藏这一楼" class="mes_button rs_fav_btn fa-regular fa-bookmark"></div>';
 const UNDO_LIMIT = 100;
 const TYPING_PAUSE = 800;
 
@@ -156,10 +156,15 @@ const CHAR_FIELDS = [
 ];
 
 function injectButtons() {
-    const $tpl = $('#message_template .mes_buttons .extraMesButtons');
-    if (!$tpl.find('.regen_splice_btn').length) $tpl.prepend(BTN_HTML);
+    const add = el => {
+        $(el).find('.regen_splice_btn, .rs_fav_btn').remove();
+        $(el).prepend(BTN_HTML);
+    };
+    $('#message_template .mes_buttons .extraMesButtons').each(function () {
+        if (!$(this).find('.rs_fav_btn').length) add(this);
+    });
     $('#chat .mes .extraMesButtons').each(function () {
-        if (!$(this).find('.regen_splice_btn').length) $(this).prepend(BTN_HTML);
+        if (!$(this).find('.rs_fav_btn').length) add(this);
     });
 }
 
@@ -276,7 +281,7 @@ const BIN_KEY = 'bin';
 const BIN_DAYS = 30;
 const BIN_MAX = 300;
 const BIN_PREVIEW = 60;
-const BIN_TYPES = { card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
+const BIN_TYPES = { fav: '收藏', card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
 
 async function binAll() {
     const cut = Date.now() - BIN_DAYS * 864e5;
@@ -441,12 +446,14 @@ function updateChipsOf(el) {
 
 function updateAllVersionChips() {
     document.querySelectorAll('#chat .mes[mesid]').forEach(updateChipsOf);
+    favMarksSoon();
 }
 
 function updateChipsById(id) {
     const el = Number.isInteger(Number(id)) ? mesEl(Number(id)) : null;
     if (el) updateChipsOf(el);
     else updateAllVersionChips();
+    favMarksSoon();
 }
 
 const BRANCH_CACHE_KEY = 'regenSplice:branchMain';
@@ -1980,7 +1987,7 @@ const isDirty = () => {
     if (!t) return false;
     if (t.kind === 'preset') return !!pz.tgt?.dirty;
     if (t.kind === 'regex') return rx.dirty;
-    if (t.kind === 'set' || t.kind === 'bin') return false;
+    if (t.kind === 'set' || t.kind === 'bin' || t.kind === 'fav') return false;
     return !!bodyEl() && bodyEl().value !== t.initial;
 };
 
@@ -1997,6 +2004,7 @@ function ensureShell() {
         <option value="world">世界书</option>
         <option value="preset">预设缝合</option>
         <option value="regex">正则</option>
+        <option value="fav">收藏</option>
         <option value="bin">回收站</option>
         <option value="set">设置</option>
       </select>
@@ -2122,6 +2130,7 @@ function ensureShell() {
       <input type="file" class="rs_shelf_file" accept="image/*" hidden>
     </div>
     <div class="rs_bin"></div>
+    <div class="rs_fav"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
         <div class="rs_rx_tabs"><span data-t="g">全局</span><span data-t="p">预设</span><span data-t="c">角色</span></div>
@@ -2195,13 +2204,16 @@ function showTarget(t) {
     if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
     if (state.target?.kind === 'regex' && t.kind !== 'regex') rxReset();
     $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex')
-        .toggleClass('rs_mode_set', t.kind === 'set').toggleClass('rs_mode_bin', t.kind === 'bin');
-    if (t.kind === 'set' || t.kind === 'bin') {
+        .toggleClass('rs_mode_set', t.kind === 'set').toggleClass('rs_mode_bin', t.kind === 'bin').toggleClass('rs_mode_fav', t.kind === 'fav');
+    if (t.kind === 'set' || t.kind === 'bin' || t.kind === 'fav') {
         state.target = t;
         $('#rs_panel .rs_kind').val(t.kind);
         $('#rs_panel .rs_title').text(t.subtitle);
         if (t.kind === 'set') renderSettings();
-        else binRender();
+        else if (t.kind === 'fav') {
+            fav.open = null;
+            favRender();
+        } else binRender();
         return;
     }
     if (t.kind === 'preset' || t.kind === 'regex') {
@@ -4748,6 +4760,12 @@ ${types.length > 1 ? `<div class="rs_pz_cats rs_on">${['', ...types].map(t => `<
 async function binRestore(x) {
     const d = x.data;
     const c = ctx();
+    if (x.type === 'fav') {
+        const list = await favAll();
+        if (!list.some(y => y.id === d.id)) await idbPut(FAV_KEY, [d, ...list]);
+        favMarksSoon();
+        return true;
+    }
     if (x.type === 'ver') {
         const v = await getVers(d.key);
         if (!v.some(y => y.id === d.item.id)) await putVers(d.key, [...v, d.item]);
@@ -4911,6 +4929,164 @@ async function binAct(id, a) {
     }
     await binDrop([id]);
     binRender();
+}
+
+const FAV_KEY = 'favs';
+const FAV_PREVIEW = 60;
+const fav = { q: '', open: null, raw: false, timer: 0, qt: 0 };
+
+const favChatId = () => String(ctx().getCurrentChatId?.() || '');
+const favDate = m => String(m?.send_date ?? '');
+
+async function favAll() {
+    const v = await idbGet(FAV_KEY);
+    return Array.isArray(v) ? v : [];
+}
+
+function favChatLabel() {
+    const c = ctx();
+    const who = c.groupId ? c.groups?.find(g => g.id === c.groupId)?.name : c.characters?.[c.characterId]?.name;
+    return [who || c.name2, favChatId()].filter(Boolean).join(' · ');
+}
+
+function favLive(f) {
+    const chat = ctx().chat || [];
+    if (f.chat !== favChatId()) return null;
+    const same = (m, i) => m && favDate(m) === f.date && (m.name || '') === f.name && (i === f.mesid || f.date);
+    if (same(chat[f.mesid], f.mesid)) return { i: f.mesid, m: chat[f.mesid] };
+    const i = f.date ? chat.findIndex((m, k) => same(m, k)) : -1;
+    return i >= 0 ? { i, m: chat[i] } : null;
+}
+
+async function favFind(id) {
+    const c = ctx();
+    const m = c.chat?.[id];
+    const chat = favChatId();
+    return m ? (await favAll()).find(f => f.chat === chat && f.date === favDate(m) && (f.name === (m.name || '')) && (f.mesid === id || f.date)) || null : null;
+}
+
+async function favRemove(f) {
+    if (!(await binAdd({ type: 'fav', label: `${f.name || '（无名）'} · 第 ${f.mesid} 楼`, sub: f.chatLabel, data: f }))) {
+        toastr.error('没能放进回收站，为了安全没有取消');
+        return false;
+    }
+    await idbPut(FAV_KEY, (await favAll()).filter(y => y.id !== f.id));
+    favMarksSoon();
+    return true;
+}
+
+async function favToggle(id) {
+    const c = ctx();
+    const m = c.chat?.[id];
+    if (!m) return;
+    const hit = await favFind(id);
+    if (hit) {
+        if (await favRemove(hit)) toastr.info('取消收藏了，回收站里能找回');
+        return;
+    }
+    const item = { id: pzUid(), chat: favChatId(), chatLabel: favChatLabel(), mesid: id, date: favDate(m), name: m.name || '', user: !!m.is_user, mes: String(m.mes ?? ''), at: Date.now() };
+    if (!(await idbPut(FAV_KEY, [item, ...(await favAll())]))) return toastr.error('没能收藏');
+    toastr.success(`收藏了第 ${id} 楼，在插件的「收藏」里看`);
+    favMarksSoon();
+}
+
+function favMarksSoon() {
+    clearTimeout(fav.timer);
+    fav.timer = setTimeout(favMarks, 100);
+}
+
+async function favMarks() {
+    const chat = favChatId();
+    const list = (await favAll()).filter(f => f.chat === chat);
+    const c = ctx();
+    document.querySelectorAll('#chat .mes[mesid]').forEach(el => {
+        const i = Number(el.getAttribute('mesid'));
+        const m = c.chat?.[i];
+        const on = !!m && list.some(f => f.date === favDate(m) && f.name === (m.name || '') && (f.mesid === i || f.date));
+        el.classList.toggle('rs_faved', on);
+        el.querySelectorAll('.rs_fav_btn').forEach(b => {
+            b.classList.toggle('fa-solid', on);
+            b.classList.toggle('fa-regular', !on);
+            b.title = on ? '取消收藏' : '收藏这一楼';
+        });
+    });
+}
+
+function favBody(f, text, i) {
+    if (fav.raw) return `<pre class="rs_fav_raw">${escapeHtml(text)}</pre>`;
+    try {
+        const html = ctx().messageFormatting?.(text, f.name, false, f.user, i ?? undefined);
+        if (typeof html === 'string') return `<div class="mes_text rs_fav_text">${html}</div>`;
+    } catch (e) {
+        console.warn('[重生成拼接] 收藏排版失败', e);
+    }
+    return `<div class="rs_fav_text">${escapeHtml(text).replace(/\n/g, '<br>')}</div>`;
+}
+
+async function favRender() {
+    const $box = $('#rs_panel .rs_fav');
+    const list = await favAll();
+    if (fav.open) {
+        const f = list.find(y => y.id === fav.open);
+        if (!f) {
+            fav.open = null;
+            return favRender();
+        }
+        const live = favLive(f);
+        if (live && String(live.m.mes ?? '') !== f.mes) {
+            f.mes = String(live.m.mes ?? '');
+            f.mesid = live.i;
+            await idbPut(FAV_KEY, list);
+        }
+        const here = f.chat === favChatId();
+        const note = live ? (live.m.is_system ? '这楼现在是隐藏的，内容照样能看' : '') : here ? '原楼已经删掉了，显示的是收藏时的内容' : `在别的聊天（${f.chatLabel || f.chat}），显示的是最后看到的内容`;
+        $box.html(`
+<div class="rs_bar rs_fav_head"><span class="rs_icon rs_fav_back fa-solid fa-chevron-left" title="返回"></span><div class="rs_bar_title">${escapeHtml(f.name || '（无名）')} · 第 ${live ? live.i : f.mesid} 楼</div><div class="rs_bar_spacer"></div>
+  <span class="rs_icon rs_fav_act fa-solid ${fav.raw ? 'fa-align-left' : 'fa-code'}" data-a="raw" title="${fav.raw ? '看排版' : '看原文'}"></span>
+  <span class="rs_icon rs_fav_act fa-solid fa-copy" data-a="copy" title="复制"></span>
+  ${live ? '<span class="rs_icon rs_fav_act fa-solid fa-location-arrow" data-a="jump" title="跳到聊天里这楼"></span>' : ''}
+  <span class="rs_icon rs_fav_act fa-solid fa-bookmark" data-a="del" title="取消收藏"></span>
+</div>
+${note ? `<div class="rs_fav_note">${escapeHtml(note)}</div>` : ''}
+<div class="rs_fav_read">${favBody(f, f.mes, live?.i)}</div>`);
+        return;
+    }
+    if (!$box.find('.rs_fav_q').length) {
+        $box.html(`<div class="rs_pz_filter"><input type="text" class="rs_fav_q" placeholder="搜收藏的内容、名字、聊天"></div><div class="rs_pz_list rs_fav_list"></div>`);
+        $box.find('.rs_fav_q').val(fav.q);
+    }
+    const q = fav.q.toLowerCase();
+    const chat = favChatId();
+    const shown = list.filter(f => !q || `${f.name} ${f.chatLabel} ${f.mes}`.toLowerCase().includes(q));
+    shown.sort((a, b) => (b.chat === chat) - (a.chat === chat) || (a.chat === b.chat && a.chat === chat ? a.mesid - b.mesid : b.at - a.at));
+    const row = f => {
+        const live = favLive(f);
+        const tag = f.chat !== chat ? '别的聊天' : !live ? '原楼已删' : live.m.is_system ? '已隐藏' : '';
+        return `<div class="rs_pz_row rs_fav_row" data-id="${f.id}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(f.name || '（无名）')} · 第 ${live ? live.i : f.mesid} 楼</span>${tag ? `<span class="rs_pz_cat_tag">${tag}</span>` : ''}</div><div class="rs_pz_pv">${escapeHtml(previewText(live ? live.m.mes : f.mes, FAV_PREVIEW))}</div>${f.chat !== chat ? `<div class="rs_pz_pv">${escapeHtml(f.chatLabel || f.chat)}</div>` : ''}</div></div>`;
+    };
+    $box.find('.rs_fav_list').html(shown.map(row).join('') || `<div class="rs_empty">${list.length ? '没找到' : '还没有收藏。点楼层的「…」菜单里的书签图标就能收藏，隐藏或删掉原楼以后这里照样能看。'}</div>`);
+}
+
+async function favAct(a) {
+    const f = (await favAll()).find(y => y.id === fav.open);
+    if (!f) return;
+    if (a === 'raw') {
+        fav.raw = !fav.raw;
+        return favRender();
+    }
+    if (a === 'copy') return copyText(favLive(f)?.m.mes ?? f.mes);
+    if (a === 'jump') {
+        const live = favLive(f);
+        if (!live) return;
+        await closePanel(true);
+        return jumpTo(live.i);
+    }
+    if (a === 'del') {
+        if (!(await favRemove(f))) return;
+        toastr.info('取消收藏了，回收站里能找回');
+        fav.open = null;
+        favRender();
+    }
 }
 
 const SHELF_TABS = { char: [['all', '全部'], ['tag', '标签'], ['fav', '收藏'], ['recent', '最近']], persona: [['all', '全部'], ['tag', '标题'], ['fav', '收藏']] };
@@ -5765,6 +5941,7 @@ function shelfHoldMove(e) {
     },
     regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
     set: async () => ({ kind: 'set', subtitle: '插件设置', initial: '' }),
+    fav: async () => ({ kind: 'fav', subtitle: '收藏的楼层', initial: '' }),
     bin: async () => ({ kind: 'bin', subtitle: '删掉的东西先放这里', initial: '' }),
 };
 
@@ -6062,6 +6239,23 @@ function bindPanelEvents() {
         })
         .on('click', '.regen_splice_btn', function () {
             openPanel(Number($(this).closest('.mes').attr('mesid')));
+        })
+        .on('click', '.rs_fav_btn', function () {
+            favToggle(Number($(this).closest('.mes').attr('mesid')));
+        })
+        .on('click', '#rs_panel .rs_fav_row', function () {
+            fav.open = this.dataset.id;
+            favRender();
+        })
+        .on('click', '#rs_panel .rs_fav_back', () => {
+            fav.open = null;
+            favRender();
+        })
+        .on('click', '#rs_panel .rs_fav_act', function () { favAct(this.dataset.a); })
+        .on('input', '#rs_panel .rs_fav_q', function () {
+            fav.q = this.value;
+            clearTimeout(fav.qt);
+            fav.qt = setTimeout(favRender, 200);
         })
         .on('pointerdown', '#rs_overlay', function (e) {
             this.dataset.downOnSelf = e.target === this ? '1' : '';
