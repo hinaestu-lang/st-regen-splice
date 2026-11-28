@@ -5207,7 +5207,7 @@ function openBeauty() {
     bz.tab = ['root', 'ty', 'tf'].includes(settings().bzTab) ? settings().bzTab : 'seg';
     $('#rs_panel .rs_bz').html(`
 <div class="rs_bar rs_pz_head">
-  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS</span><span data-t="root">:root</span><span data-t="ty">排版</span><span data-t="tf">字体</span></div>
+  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS</span><span data-t="root">变量</span><span data-t="ty">排版</span><span data-t="tf">字体</span></div>
   <div class="rs_bar_spacer"></div>
   <div class="rs_icon rs_bz_half fa-solid fa-table-cells-row-unlock" title="半屏，边改边看聊天"></div>
   <div class="rs_icon rs_bz_undo fa-solid fa-rotate-left" title="撤回"></div>
@@ -5465,23 +5465,28 @@ function bzToggleHalf() {
     bzBar();
 }
 
-function bzDecls(b) {
-    const out = [];
-    bzItems(b.text).forEach(it => {
-        if (it.t !== 'r' || it.open < 0 || !it.head.split(',').some(x => x.trim() === ':root')) return;
+function bzDeclsIn(b, text, base, at, out) {
+    bzItems(text).forEach(it => {
+        if (it.t !== 'r' || it.open < 0) return;
         const body0 = it.s + it.open + 1;
-        const body = b.text.slice(body0, it.e - 1);
+        const body = text.slice(body0, it.e - 1);
+        if (it.head.startsWith('@')) {
+            if (/^@(?:media|supports|container|layer|document|scope)\b/i.test(it.head)) bzDeclsIn(b, body, base + body0, it.head.replace(/\s+/g, ' '), out);
+            return;
+        }
+        const sel = it.head.replace(/\s+/g, ' ');
         let q = '';
         let paren = 0;
+        let depth = 0;
         let st = 0;
         const flush = end => {
             const raw = body.slice(st, end);
-            const m = raw.match(/^(\s*)(--[\w-]+)(\s*:\s*)([\s\S]*?)(\s*)$/);
+            const m = raw.match(/^(\s*)(--[^\s:;{}]+)(\s*:\s*)([\s\S]*?)(\s*)$/);
             if (m) {
                 const imp = m[4].match(/\s*!important$/i);
                 const val = imp ? m[4].slice(0, imp.index) : m[4];
-                const vs = body0 + st + m[1].length + m[2].length + m[3].length;
-                out.push({ name: m[2], value: val, imp: !!imp, b, vs, ve: vs + val.length });
+                const vs = base + body0 + st + m[1].length + m[2].length + m[3].length;
+                out.push({ name: m[2], value: val, imp: !!imp, b, sel, at, vs, ve: vs + val.length });
             }
             st = end + 1;
         };
@@ -5497,21 +5502,29 @@ function bzDecls(b) {
                 i = (e < 0 ? body.length : e + 2) - 1;
             } else if (ch === '(') paren++;
             else if (ch === ')') paren = Math.max(0, paren - 1);
-            else if (ch === ';' && !paren) flush(i);
+            else if (ch === '{') depth++;
+            else if (ch === '}') {
+                depth = Math.max(0, depth - 1);
+                if (!depth) st = i + 1;
+            } else if (ch === ';' && !paren && !depth) flush(i);
         }
-        if (body.slice(st).trim()) flush(body.length);
+        if (!depth && body.slice(st).trim()) flush(body.length);
     });
     return out;
 }
+
+const bzDecls = b => bzDeclsIn(b, b.text, 0, '', []);
+const bzIsRoot = sel => sel.split(',').some(x => x.trim() === ':root');
 
 function bzVars() {
     const all = bz.blocks.filter(b => !b.off).flatMap(bzDecls);
     const map = new Map();
     all.forEach(d => {
-        const x = map.get(d.name) || { name: d.name, n: 0 };
+        const key = `${d.at}\u0001${d.sel}\u0001${d.name}`;
+        const x = map.get(key) || { key, name: d.name, sel: d.sel, at: d.at, n: 0 };
         x.n++;
         x.d = d;
-        map.set(d.name, x);
+        map.set(key, x);
     });
     return [...map.values()];
 }
@@ -5521,7 +5534,7 @@ function bzVarKind(name, v) {
     if (/^url\(/i.test(t)) return 'img';
     if (/^-?\d*\.?\d+(?:px|em|rem|%|vh|vw|dvh|svh|pt|ch|vmin|vmax)?$/i.test(t)) return 'num';
     if (!/^(?:inherit|initial|unset|revert|none|auto|currentcolor)$/i.test(t) && rtParse(t)) return 'color';
-    if (/font|family/i.test(name) || /^["'][^"']*["'](?:\s*,|$)/.test(t)) return 'font';
+    if (/font|family|字体/i.test(name)) return 'font';
     return 'text';
 }
 
@@ -5540,12 +5553,12 @@ function bzRootRender() {
     const vars = bzVars();
     const $m = $('#rs_panel .rs_bz_main');
     if (!$m.find('.rs_bz_rq').length) {
-        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_rq" placeholder="搜变量名"></div><div class="rs_pz_list rs_bz_vars"></div>
+        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_rq" placeholder="搜变量名、值、选择器"></div><div class="rs_pz_list rs_bz_vars"></div>
 <div class="rs_bz_foot rs_bz_addvar"><input type="text" class="rs_bz_nn" placeholder="--新变量名"><input type="text" class="rs_bz_nv" placeholder="值"><span class="rs_pz_card_btn rs_bz_addv">加上</span></div>
 <div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_theme">${bz.themeAdd ? '收起主题颜色' : '覆盖酒馆主题颜色'}</span></div><div class="rs_bz_themebox"></div>`);
         $m.find('.rs_bz_rq').val(bz.rq);
     }
-    const rows = vars.filter(x => !q || x.name.toLowerCase().includes(q)).map(x => {
+    const rows = vars.filter(x => !q || `${x.name} ${x.sel} ${x.d.value}`.toLowerCase().includes(q)).map(x => {
         const v = x.d.value;
         const k = bzVarKind(x.name, v);
         let ctl = '';
@@ -5558,9 +5571,12 @@ function bzRootRender() {
             ctl = `<img class="rs_rx_ithumb" src="${escapeHtml(u)}" loading="lazy" referrerpolicy="no-referrer" alt=""><span class="rs_icon fa-solid fa-paste rs_bz_vpaste" title="用剪贴板里的链接"></span>`;
         }
         if (k === 'font') ctl = '';
-        return `<div class="rs_bz_var" data-n="${escapeHtml(x.name)}" data-k="${k}"><div class="rs_bz_vname"><code>${escapeHtml(x.name)}</code>${x.n > 1 ? `<span class="rs_pz_cat_tag" title="写了 ${x.n} 次，最后一次生效">×${x.n}</span>` : ''}${x.d.imp ? '<span class="rs_pz_cat_tag">!important</span>' : ''}<span class="rs_bz_vfrom">${escapeHtml(x.d.b.name)}</span></div><div class="rs_bz_vctl">${ctl}<input type="text" class="rs_bz_vin" value="${escapeHtml(v)}" spellcheck="false" autocapitalize="off"${k === 'font' ? ' list="rs_bz_fontlist"' : ''}></div></div>`;
+        if (k === 'text') ctl = rtColorHits(v).map((h, i) => `<span class="rs_rx_sw rs_bz_vcsw" data-ci="${i}" style="--c:${escapeHtml(h.s)}" title="改这个颜色"></span>`).join('');
+        const where = [x.at, bzIsRoot(x.sel) ? '' : x.sel].filter(Boolean).join(' ');
+        const ta = k === 'text' && (v.length > 40 || v.includes('\n'));
+        return `<div class="rs_bz_var" data-n="${escapeHtml(x.key)}" data-k="${k}"><div class="rs_bz_vname"><code>${escapeHtml(x.name)}</code><span class="rs_pz_cat_tag">${{ color: '颜色', num: '尺寸', img: '图片', font: '字体', text: /^["']/.test(v.trim()) ? '文案' : '其他' }[k]}</span>${x.n > 1 ? `<span class="rs_pz_cat_tag" title="写了 ${x.n} 次，最后一次生效">×${x.n}</span>` : ''}${x.d.imp ? '<span class="rs_pz_cat_tag">!important</span>' : ''}<span class="rs_bz_vfrom">${escapeHtml(x.d.b.name)}</span></div>${where ? `<div class="rs_bz_vwhere">${escapeHtml(where)}</div>` : ''}<div class="rs_bz_vctl">${ctl}${ta ? `<textarea class="rs_bz_vin" rows="3" spellcheck="false" autocapitalize="off">${escapeHtml(v)}</textarea>` : `<input type="text" class="rs_bz_vin" value="${escapeHtml(v)}" spellcheck="false" autocapitalize="off"${k === 'font' ? ' list="rs_bz_fontlist"' : ''}>`}</div></div>`;
     }).join('');
-    $m.find('.rs_bz_vars').html((rows || `<div class="rs_empty">${q ? '没找到' : '还没有 :root 变量。下面可以加一个，或者把酒馆主题颜色拿过来改'}</div>`) + `<datalist id="rs_bz_fontlist">${tfFonts().map(f => `<option value="&quot;${escapeHtml(f.name)}&quot;">`).join('')}</datalist>`);
+    $m.find('.rs_bz_vars').html((rows || `<div class="rs_empty">${q ? '没找到' : '自定义 CSS 里还没有变量（--开头的）。下面可以在 :root 里加一个，或者把酒馆主题颜色拿过来改'}</div>`) + `<datalist id="rs_bz_fontlist">${tfFonts().map(f => `<option value="&quot;${escapeHtml(f.name)}&quot;">`).join('')}</datalist>`);
     $m.find('.rs_bz_vars .rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
     $m.find('.rs_bz_theme').text(bz.themeAdd ? '收起主题颜色' : '覆盖酒馆主题颜色');
     const have = new Set(vars.map(x => x.name));
@@ -5568,8 +5584,8 @@ function bzRootRender() {
     $m.find('.rs_bz_themebox').html(bz.themeAdd ? `<div class="rs_set_note">点一个加进 :root，带 !important 才能盖过主题设置</div><div class="rs_pz_cats rs_on">${CP_THEME_VARS.map(([v, t]) => `<span class="rs_chip${have.has(v) ? ' rs_off' : ''}" data-v="${v}" data-c="${escapeHtml(root.getPropertyValue(v).trim())}">${t}</span>`).join('')}</div>` : '');
 }
 
-function bzVarSet(name, value, live) {
-    const x = bzVars().find(y => y.name === name);
+function bzVarSet(key, value, live) {
+    const x = bzVars().find(y => y.key === key);
     if (!x) return false;
     const v = String(value);
     if (x.d.value === v) return true;
@@ -5582,7 +5598,7 @@ function bzVarSet(name, value, live) {
 }
 
 function bzVarRow(row) {
-    const x = bzVars().find(y => y.name === row.dataset.n);
+    const x = bzVars().find(y => y.key === row.dataset.n);
     if (!x) return;
     const v = x.d.value;
     $(row).find('.rs_bz_vin').not(':focus').val(v);
@@ -5592,12 +5608,12 @@ function bzVarRow(row) {
 function bzVarAdd(name, value, imp) {
     name = String(name || '').trim();
     value = String(value ?? '').trim();
-    if (!/^--[\w-]+$/.test(name)) return toastr.warning('变量名要以 -- 开头，只能有字母数字和 - _');
+    if (!/^--[^\s:;{}]+$/.test(name)) return toastr.warning('变量名要以 -- 开头，不能有空格和 : ; { }');
     if (!value) return toastr.warning('值不能空着');
-    if (bzVars().some(x => x.name === name)) return toastr.info('已经有这个变量了');
+    if (bzVars().some(x => x.name === name && !x.at && bzIsRoot(x.sel))) return toastr.info('已经有这个变量了');
     bzPush();
     const decl = `  ${name}: ${value}${imp ? ' !important' : ''};`;
-    const roots = bz.blocks.filter(b => !b.off).flatMap(b => bzItems(b.text).filter(it => it.t === 'r' && it.open >= 0 && it.head.split(',').some(s => s.trim() === ':root')).map(it => ({ b, it })));
+    const roots = bz.blocks.filter(b => !b.off).flatMap(b => bzItems(b.text).filter(it => it.t === 'r' && it.open >= 0 && bzIsRoot(it.head)).map(it => ({ b, it })));
     const last = roots[roots.length - 1];
     if (last) {
         const close = last.it.e - 1;
@@ -7481,13 +7497,33 @@ function bindPanelEvents() {
         })
         .on('click', '#rs_panel .rs_bz_vsw', function () {
             const row = this.closest('.rs_bz_var');
-            const x = bzVars().find(y => y.name === row.dataset.n);
+            const x = bzVars().find(y => y.key === row.dataset.n);
             if (!x) return;
             const hex = x.d.value.trim().startsWith('#');
             bz.varLive = false;
             cpOpen(x.d.value, {
                 onInput: c => {
                     bzVarSet(row.dataset.n, rtFormat(hex ? 'hex' : 'rgb', c), true);
+                    bzVarRow(row);
+                },
+                onDone: () => { bz.varLive = false; },
+            });
+        })
+        .on('click', '#rs_panel .rs_bz_vcsw', function () {
+            const row = this.closest('.rs_bz_var');
+            const sw = this;
+            const ci = Number(this.dataset.ci);
+            const x = bzVars().find(y => y.key === row.dataset.n);
+            const hit = x && rtColorHits(x.d.value)[ci];
+            if (!hit) return;
+            bz.varLive = false;
+            cpOpen(hit.s, {
+                onInput: c => {
+                    const cur = bzVars().find(y => y.key === row.dataset.n)?.d.value || '';
+                    const hits = rtColorHits(cur);
+                    if (!hits[ci]) return;
+                    bzVarSet(row.dataset.n, rtSwap(cur, hits, [ci], rtFormat(hit.s.startsWith('#') ? 'hex' : 'rgb', c)), true);
+                    sw.style.setProperty('--c', rtFormat('rgb', c));
                     bzVarRow(row);
                 },
                 onDone: () => { bz.varLive = false; },
@@ -7505,7 +7541,7 @@ function bindPanelEvents() {
             if (bzVarSet(row.dataset.n, this.value.trim())) bzRootRender();
         })
         .on('keydown', '#rs_panel .rs_bz_vin, #rs_panel .rs_bz_nv', function (e) {
-            if (e.key === 'Enter') this.blur();
+            if (e.key === 'Enter' && this.tagName !== 'TEXTAREA') this.blur();
         })
         .on('click', '#rs_panel .rs_bz_vpaste', async function () {
             let t = '';

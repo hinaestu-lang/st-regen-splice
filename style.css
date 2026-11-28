@@ -3224,3 +3224,18 @@ body > #rs_cp {
     padding: 0;
     border: none;
 }
+
+#rs_panel .rs_bz_vwhere {
+    margin-top: -2px;
+    font-size: 11px;
+    font-family: var(--monoFontFamily, monospace);
+    opacity: 0.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#rs_panel textarea.rs_bz_vin {
+    resize: vertical;
+    line-height: 1.5;
+}
