@@ -141,7 +141,7 @@ function refreshSwipeUI(id, msg) {
     }
 }
 
-const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div><div title="收藏这一楼" class="mes_button rs_fav_btn fa-regular fa-bookmark"></div>';
+const BTN_HTML = '<div title="版本拼接" class="mes_button regen_splice_btn fa-solid fa-scissors"></div><div title="收藏这一楼" class="mes_button rs_fav_btn fa-regular fa-star"></div>';
 const UNDO_LIMIT = 100;
 const TYPING_PAUSE = 800;
 
@@ -5052,7 +5052,7 @@ async function favRender() {
   <span class="rs_icon rs_fav_act fa-solid ${fav.raw ? 'fa-align-left' : 'fa-code'}" data-a="raw" title="${fav.raw ? '看排版' : '看原文'}"></span>
   <span class="rs_icon rs_fav_act fa-solid fa-copy" data-a="copy" title="复制"></span>
   ${live ? '<span class="rs_icon rs_fav_act fa-solid fa-location-arrow" data-a="jump" title="跳到聊天里这楼"></span>' : ''}
-  <span class="rs_icon rs_fav_act fa-solid fa-bookmark" data-a="del" title="取消收藏"></span>
+  <span class="rs_icon rs_fav_act fa-solid fa-star" data-a="del" title="取消收藏"></span>
 </div>
 ${note ? `<div class="rs_fav_note">${escapeHtml(note)}</div>` : ''}
 <div class="rs_fav_read">${favBody(f, f.mes, live?.i)}</div>`);
@@ -5071,7 +5071,7 @@ ${note ? `<div class="rs_fav_note">${escapeHtml(note)}</div>` : ''}
         const tag = f.chat !== chat ? '别的聊天' : !live ? '原楼已删' : live.m.is_system ? '已隐藏' : '';
         return `<div class="rs_pz_row rs_fav_row" data-id="${f.id}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(f.name || '（无名）')} · 第 ${live ? live.i : f.mesid} 楼</span>${tag ? `<span class="rs_pz_cat_tag">${tag}</span>` : ''}</div><div class="rs_pz_pv">${escapeHtml(previewText(live ? live.m.mes : f.mes, FAV_PREVIEW))}</div>${f.chat !== chat ? `<div class="rs_pz_pv">${escapeHtml(f.chatLabel || f.chat)}</div>` : ''}</div></div>`;
     };
-    $box.find('.rs_fav_list').html(shown.map(row).join('') || `<div class="rs_empty">${list.length ? '没找到' : '还没有收藏。点楼层的「…」菜单里的书签图标就能收藏，隐藏或删掉原楼以后这里照样能看。'}</div>`);
+    $box.find('.rs_fav_list').html(shown.map(row).join('') || `<div class="rs_empty">${list.length ? '没找到' : '还没有收藏。点楼层的「…」菜单里的星星图标就能收藏，隐藏或删掉原楼以后这里照样能看。'}</div>`);
 }
 
 async function favAct(a) {
