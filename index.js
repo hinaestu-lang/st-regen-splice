@@ -24,6 +24,8 @@ const DEFAULTS = {
     snapKeep: 30,
     lastKind: 'msg',
     bzTab: 'seg',
+    bzLib: [],
+    rxView: 'html',
     cpRecent: [],
     cpSaved: [],
     findExclude: '',
@@ -284,7 +286,7 @@ const BIN_KEY = 'bin';
 const BIN_DAYS = 30;
 const BIN_MAX = 300;
 const BIN_PREVIEW = 60;
-const BIN_TYPES = { css: '美化 CSS', fav: '收藏', card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
+const BIN_TYPES = { theme: '主题', css: '美化 CSS', fav: '收藏', card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
 
 async function binAll() {
     const cut = Date.now() - BIN_DAYS * 864e5;
@@ -3993,7 +3995,7 @@ const RX_FLAGS = [['markdownOnly', '只改显示'], ['promptOnly', '只改发送
 const RX_MACRO = [[0, '不替换宏'], [1, '宏原样替换'], [2, '宏转义后替换']];
 const RX_UNDO = 50;
 
-const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set(), pick: null, unfold: new Set(), last: {} };
+const rx = { scope: 'g', list: [], undo: [], redo: [], dirty: false, ed: null, sel: new Set(), pick: null, unfold: new Set(), last: {}, pvTimer: 0 };
 
 function rxBlank() {
     return {
@@ -4423,7 +4425,7 @@ function rxOpenEd(id) {
     <select class="rs_rx_f text_pole" data-f="substituteRegex">${RX_MACRO.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>
     <span>深度</span><input type="number" class="rs_rx_f" data-f="minDepth" placeholder="最小" min="-1"><span>~</span><input type="number" class="rs_rx_f" data-f="maxDepth" placeholder="最大" min="0">
   </div>
-  <div class="rs_rx_lb">试一试</div>
+  <div class="rs_rx_lb rs_rx_lbrow"><span>试一试</span><span class="rs_bar_spacer"></span><span class="rs_chip rs_rx_usemes">用最新一楼</span><span class="rs_rx_tabs rs_rx_view"><span data-v="html">效果</span><span data-v="text">文本</span></span></div>
   <textarea class="rs_rx_test" rows="3" spellcheck="false" placeholder="贴一段文字看看替换效果"></textarea>
   <div class="rs_rx_out"></div>
 </div>
@@ -5166,6 +5168,8 @@ function bzReset() {
     bz.live = false;
     bz.half = false;
     bz.open = null;
+    lib.list = false;
+    lib.ed = null;
     $('#rs_overlay').removeClass('rs_half');
     $('#rs_cp').remove();
 }
@@ -5204,10 +5208,12 @@ function bzBar() {
 function openBeauty() {
     bzLoad();
     bz.live = true;
-    bz.tab = ['root', 'ty', 'tf'].includes(settings().bzTab) ? settings().bzTab : 'seg';
+    bz.tab = ['root', 'ty', 'tf', 'th'].includes(settings().bzTab) ? settings().bzTab : 'seg';
+    lib.list = false;
+    lib.ed = null;
     $('#rs_panel .rs_bz').html(`
 <div class="rs_bar rs_pz_head">
-  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS</span><span data-t="root">变量</span><span data-t="ty">排版</span><span data-t="tf">字体</span></div>
+  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS</span><span data-t="root">变量</span><span data-t="ty">排版</span><span data-t="tf">字体</span><span data-t="th">主题</span></div>
   <div class="rs_bar_spacer"></div>
   <div class="rs_icon rs_bz_half fa-solid fa-table-cells-row-unlock" title="半屏，边改边看聊天"></div>
   <div class="rs_icon rs_bz_undo fa-solid fa-rotate-left" title="撤回"></div>
@@ -5221,17 +5227,20 @@ function openBeauty() {
 
 function bzRender() {
     $('#rs_panel .rs_bz_tabs span').each(function () { $(this).toggleClass('rs_on', this.dataset.t === bz.tab); });
-    $('#rs_panel .rs_bz').toggleClass('rs_bz_editing', !!bz.open);
+    $('#rs_panel .rs_bz').toggleClass('rs_bz_editing', !!bz.open || !!lib.ed);
     bzBar();
+    if (lib.ed) return libEdRender();
     if (bz.open) return bzEdRender();
     $('#rs_panel .rs_bz_ed').empty();
     rt.host = null;
     if (bz.tab === 'root') return bzRootRender();
     if (bz.tab === 'ty') return tyRender();
     if (bz.tab === 'tf') return tfRender();
+    if (bz.tab === 'th') return thRender();
+    if (lib.list) return libListRender();
     const $m = $('#rs_panel .rs_bz_main');
     if (!$m.find('.rs_bz_q').length) {
-        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_q" placeholder="在所有 CSS 里搜"></div><div class="rs_pz_list rs_bz_list"></div><div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_new">新建一段</span></div>`);
+        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_q" placeholder="在所有 CSS 里搜"></div><div class="rs_pz_list rs_bz_list"></div><div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_new">新建一段</span><span class="rs_pz_card_btn rs_lib_open">素材库</span></div>`);
         $m.find('.rs_bz_q').val(bz.q);
     }
     bzListRender();
@@ -5323,6 +5332,7 @@ ${list.length > 1 ? `<div class="rs_rx_tabs rs_bz_parts">${list.map((_, k) => `<
 </div>
 <div class="rs_bz_acts">
   <span class="rs_pz_card_btn" data-a="split">从光标处拆成两段</span>
+  <span class="rs_pz_card_btn" data-a="lib">存进素材库</span>
   ${others.length ? `<span class="rs_pz_card_btn${bz.merging ? ' rs_on' : ''}" data-a="merge">合并到别的段</span>` : ''}
   <span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除这段</span>
 </div>
@@ -5409,6 +5419,7 @@ function bzMergeInto(target) {
 
 async function bzEdAct(a) {
     if (a === 'split') return bzSplitAt();
+    if (a === 'lib') return libFromSeg();
     if (a === 'merge') {
         bz.merging = !bz.merging;
         return bzEdRender();
@@ -5938,6 +5949,225 @@ async function tfUpload(file) {
     tfAdd(path.startsWith('/') ? path : `/${path}`, name);
 }
 
+const LIB_PREVIEW = 60;
+const lib = { list: false, ed: null, q: '', cat: '' };
+
+const libAll = () => (Array.isArray(settings().bzLib) ? settings().bzLib : []);
+
+function libSaveAll(list) {
+    settings().bzLib = list;
+    ctx().saveSettingsDebounced();
+}
+
+function libListRender() {
+    const q = lib.q.trim().toLowerCase();
+    const all = libAll();
+    const cats = [...new Set(all.map(x => x.cat).filter(Boolean))];
+    if (lib.cat && !cats.includes(lib.cat)) lib.cat = '';
+    const shown = all.filter(x => (!lib.cat || x.cat === lib.cat) && (!q || `${x.name} ${x.cat} ${x.code}`.toLowerCase().includes(q)));
+    const $m = $('#rs_panel .rs_bz_main');
+    if (!$m.find('.rs_lib_q').length) {
+        $m.html(`<div class="rs_bar rs_lib_head"><span class="rs_icon rs_lib_back fa-solid fa-chevron-left" title="返回"></span><div class="rs_bar_title">素材库</div><div class="rs_bar_spacer"></div><span class="rs_pz_card_btn rs_lib_new">新建素材</span></div>
+<div class="rs_pz_filter"><input type="text" class="rs_lib_q" placeholder="搜素材名、分类、代码"></div><div class="rs_lib_cats"></div><div class="rs_pz_list rs_lib_list"></div>`);
+        $m.find('.rs_lib_q').val(lib.q);
+    }
+    $m.find('.rs_lib_cats').html(cats.length ? `<div class="rs_pz_cats rs_on">${['', ...cats].map(c => `<span class="rs_chip${lib.cat === c ? ' rs_on' : ''}" data-c="${escapeHtml(c)}">${c ? escapeHtml(c) : '全部'}</span>`).join('')}</div>` : '');
+    $m.find('.rs_lib_list').html(shown.map(x => {
+        const imgs = rtImgHits(x.code).length;
+        const cols = rtColorHits(x.code).length;
+        const tags = `${x.cat ? `<span class="rs_pz_cat_tag">${escapeHtml(x.cat)}</span>` : ''}${imgs ? `<span class="rs_pz_cat_tag">图 ${imgs}</span>` : ''}${cols ? `<span class="rs_pz_cat_tag">色 ${cols}</span>` : ''}`;
+        return `<div class="rs_pz_row rs_lib_row" data-id="${x.id}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(x.name)}</span>${tags}</div><div class="rs_pz_pv">${escapeHtml(x.code.replace(/\s+/g, ' ').slice(0, LIB_PREVIEW))}</div></div></div>`;
+    }).join('') || `<div class="rs_empty">${all.length ? '没找到' : '素材库是空的。在 CSS 段里点「存进素材库」，或者点右上角「新建素材」把常用代码贴进来。'}</div>`);
+}
+
+function libEdRender() {
+    const x = lib.ed === 'new' ? { id: '', name: '', cat: '', code: '' } : libAll().find(y => y.id === lib.ed);
+    if (!x) {
+        lib.ed = null;
+        return bzRender();
+    }
+    const segs = bzGroups().map(g => g.name);
+    $('#rs_panel .rs_bz_ed').html(`
+<div class="rs_bar rs_bz_edhead"><span class="rs_icon rs_lib_edback fa-solid fa-chevron-left" title="返回素材库"></span><input type="text" class="rs_lib_in rs_lib_name" placeholder="素材名" value="${escapeHtml(x.name)}"><input type="text" class="rs_lib_in rs_lib_cat" placeholder="分类" value="${escapeHtml(x.cat)}" list="rs_lib_catlist"><datalist id="rs_lib_catlist">${[...new Set(libAll().map(y => y.cat).filter(Boolean))].map(c => `<option value="${escapeHtml(c)}">`).join('')}</datalist></div>
+<div class="rs_rx_rep rs_bz_rep">
+  <div class="rs_rx_lb rs_rx_lbrow"><span>先换好图和颜色再插进去</span><span class="rs_bar_spacer"></span>
+    <span class="rs_icon rs_rx_tool fa-solid fa-rotate-left rs_off" data-t="undo" title="撤销"></span>
+    <span class="rs_chip rs_rx_tool" data-t="find"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <span class="rs_chip rs_rx_tool" data-t="img">图片<span class="rs_rx_n"></span></span>
+    <span class="rs_chip rs_rx_tool" data-t="color">颜色<span class="rs_rx_n"></span></span>
+    <span class="rs_icon rs_rx_tool fa-solid fa-expand" data-t="full" title="放大"></span>
+  </div>
+  <div class="rs_rx_tbox"></div>
+  <div class="rs_rx_repwrap"><div class="rs_rx_hl rs_rx_code"></div><textarea class="rs_rx_code rs_rx_reptext rs_lib_code" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="把 CSS 贴进来"></textarea></div>
+</div>
+<div class="rs_bz_acts">
+  <span class="rs_pz_card_btn" data-a="new">插入成新的一段</span>
+  ${segs.length ? '<span class="rs_pz_card_btn" data-a="into">加到某一段后面</span>' : ''}
+  <span class="rs_pz_card_btn" data-a="save">${x.id ? '保存修改到素材库' : '存进素材库'}</span>
+  ${x.id ? '<span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删掉素材</span>' : ''}
+</div>
+<div class="rs_pz_cats rs_on rs_lib_into" hidden>${segs.map(n => `<span class="rs_chip" data-g="${escapeHtml(n)}">${escapeHtml(n)}</span>`).join('')}</div>`);
+    $('#rs_panel .rs_lib_code').val(x.code);
+    Object.assign(rt, { host: $('#rs_panel .rs_bz_rep')[0], fullEl: $('#rs_panel .rs_bz_ed')[0], onChange: null, tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] });
+    $('#rs_panel .rs_bz_ed').removeClass('rs_rx_full');
+    rtRefresh();
+}
+
+function libForm() {
+    return {
+        name: String($('#rs_panel .rs_lib_name').val() || '').trim(),
+        cat: String($('#rs_panel .rs_lib_cat').val() || '').trim(),
+        code: lf($('#rs_panel .rs_lib_code').val()).trim(),
+    };
+}
+
+function libInsert(intoName) {
+    const f = libForm();
+    if (!f.code) return toastr.warning('代码是空的');
+    bzPush();
+    if (intoName) {
+        const list = bz.blocks.filter(b => b.name === intoName);
+        const b = list[list.length - 1];
+        if (!b) return;
+        b.text = [b.text.trimEnd(), f.code].filter(Boolean).join('\n\n');
+        b.off = false;
+    } else {
+        bz.blocks.push(bzNewBlock(bzUniqueName(f.name || '素材'), f.code));
+    }
+    bzChanged();
+    const target = intoName || bz.blocks[bz.blocks.length - 1].name;
+    lib.ed = null;
+    lib.list = false;
+    toastr.success(`插进了「${target}」，点「写回」才会存进酒馆`);
+    bzOpenGroup(target);
+}
+
+async function libEdAct(a) {
+    const f = libForm();
+    if (a === 'new') return libInsert('');
+    if (a === 'into') {
+        const el = $('#rs_panel .rs_lib_into')[0];
+        if (el) el.hidden = !el.hidden;
+        return;
+    }
+    if (a === 'save') {
+        if (!f.name) return toastr.warning('给素材起个名字');
+        if (!f.code) return toastr.warning('代码是空的');
+        const all = libAll();
+        const i = all.findIndex(y => y.id === lib.ed);
+        if (i >= 0) all[i] = { ...all[i], ...f };
+        else {
+            const id = pzUid();
+            all.unshift({ id, ...f });
+            lib.ed = id;
+        }
+        libSaveAll(all);
+        toastr.success('存进素材库了');
+        return libEdRender();
+    }
+    if (a === 'del') {
+        if (!(await askConfirm(`删掉素材「${f.name || '（无名）'}」？`))) return;
+        libSaveAll(libAll().filter(y => y.id !== lib.ed));
+        lib.ed = null;
+        bzRender();
+    }
+}
+
+function libFromSeg() {
+    const b = bzCur();
+    if (!b?.text.trim()) return toastr.warning('这段是空的');
+    const all = libAll();
+    const id = pzUid();
+    all.unshift({ id, name: bz.open, cat: '', code: b.text.trim() });
+    libSaveAll(all);
+    toastr.success(`「${bz.open}」存进素材库了`);
+}
+
+const th = { list: [], cur: '', q: '', loading: false };
+const thOpt = name => [...($('#themes')[0]?.options || [])].find(o => o.value === name) || null;
+
+async function thLoad() {
+    th.loading = true;
+    try {
+        const d = await postJson('/api/settings/get', {});
+        th.list = Array.isArray(d?.themes) ? d.themes.filter(x => x?.name) : [];
+    } catch (e) {
+        console.error('[重生成拼接] 读主题失败', e);
+        th.list = [];
+    }
+    th.cur = String(ctx().powerUserSettings?.theme || $('#themes').val() || '');
+    th.loading = false;
+}
+
+function thDots(t) {
+    return ['main_text_color', 'italics_text_color', 'quote_text_color', 'blur_tint_color', 'chat_tint_color']
+        .map(k => t[k]).filter(Boolean).map(c => `<span class="rs_th_dot" style="--c:${escapeHtml(c)}"></span>`).join('');
+}
+
+async function thRender(reload) {
+    const $m = $('#rs_panel .rs_bz_main');
+    if (!$m.find('.rs_th_q').length) {
+        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_th_q" placeholder="搜主题名"></div><div class="rs_pz_list rs_th_list"><div class="rs_empty">读取中…</div></div>
+<div class="rs_bz_foot"><span class="rs_pz_card_btn rs_th_upd">把现在的样子存进当前主题</span></div>`);
+        $m.find('.rs_th_q').val(th.q);
+        reload = true;
+    }
+    if (reload) await thLoad();
+    if (state.target?.kind !== 'css' || bz.tab !== 'th') return;
+    const q = th.q.trim().toLowerCase();
+    const shown = th.list.filter(t => !q || t.name.toLowerCase().includes(q));
+    $m.find('.rs_th_upd').text(th.cur ? `把现在的样子存进「${th.cur}」` : '把现在的样子存进当前主题');
+    $m.find('.rs_th_list').html(shown.map(t => {
+        const cur = t.name === th.cur;
+        const css = String(t.custom_css || '').trim();
+        return `<div class="rs_pz_row rs_th_row${cur ? ' rs_pz_sel' : ''}" data-n="${escapeHtml(t.name)}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(t.name)}</span>${cur ? '<span class="rs_pz_tag rs_pz_same">正在用</span>' : ''}</div><div class="rs_pz_pv"><span class="rs_th_dots">${thDots(t)}</span>${css ? `CSS ${css.length} 字` : '没有自定义 CSS'}</div></div>${cur ? '' : '<span class="rs_pz_card_btn" data-a="use">应用</span><span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除</span>'}</div>`;
+    }).join('') || `<div class="rs_empty">${th.list.length ? '没找到' : '没读到主题'}</div>`);
+}
+
+async function thUse(name) {
+    if (bzDirty()) return toastr.warning('CSS 还有没写回的改动，先写回或撤回再换主题');
+    if (!thOpt(name)) return toastr.error('酒馆里找不到这个主题');
+    const curCss = bzLiveCss();
+    const saved = lf(th.list.find(t => t.name === th.cur)?.custom_css ?? '');
+    if (curCss.trim() && curCss !== saved && !(await binAdd({ type: 'css', label: '自定义 CSS', sub: `换主题前 · ${curCss.length} 字`, data: { css: curCss } }))) {
+        return toastr.error('没能备份现在的 CSS，为了安全没有换');
+    }
+    $('#themes').val(name).trigger('change');
+    await new Promise(r => setTimeout(r, 200));
+    bzLoad();
+    bz.live = true;
+    th.cur = name;
+    toastr.success(curCss !== saved && curCss.trim() ? `换成了「${name}」，原来没存进主题的 CSS 放在回收站` : `换成了「${name}」`);
+    thRender();
+}
+
+async function thDel(name) {
+    const t = th.list.find(x => x.name === name);
+    if (!t || name === th.cur) return;
+    if (!(await askConfirm(`删除主题「${name}」？会先放进回收站`))) return;
+    if (!(await binAdd({ type: 'theme', label: name, sub: '主题', data: structuredClone(t) }))) return toastr.error('没能放进回收站，为了安全没有删');
+    const res = await apiPost('/api/themes/delete', { name });
+    if (!res?.ok) return toastr.error('删除失败');
+    thOpt(name)?.remove();
+    toastr.success(`删掉了「${name}」，回收站里能找回`);
+    thRender(true);
+}
+
+async function thUpdate() {
+    if (bzDirty()) return toastr.warning('CSS 还有没写回的改动，先写回');
+    const $btn = $('#ui-preset-update-button');
+    if (!$btn.length || !th.cur) return toastr.error('这个版本的酒馆找不到「更新主题」按钮');
+    $btn.trigger('click');
+    setTimeout(() => thRender(true), 800);
+}
+
+async function thRestore(d) {
+    const res = await apiPost('/api/themes/save', d);
+    if (!res?.ok) return false;
+    if ($('#themes').length && !thOpt(d.name)) $('#themes').append(new Option(d.name, d.name));
+    return true;
+}
+
 function rxCloseEd() {
     rx.ed = null;
     Object.assign(rt, { tool: null, full: false, host: null, fullEl: null, onChange: null });
@@ -5968,7 +6198,30 @@ function rxTest() {
     $('#rs_panel .rs_rx_err').text(bad ? '表达式写得不对' : '').toggle(!!bad);
     const text = String($('#rs_panel .rs_rx_test').val() || '');
     const out = text ? rxRun(s, text) : null;
-    $('#rs_panel .rs_rx_out').toggle(!!text).text(out === null ? '' : out === text ? '（没有匹配到）' : out || '（替换后是空的）');
+    const view = settings().rxView === 'text' ? 'text' : 'html';
+    $('#rs_panel .rs_rx_view span').each(function () { $(this).toggleClass('rs_on', this.dataset.v === view); });
+    const $out = $('#rs_panel .rs_rx_out').toggle(!!text);
+    const note = out === null ? '' : out === text ? '（没有匹配到）' : out ? '' : '（替换后是空的）';
+    if (view === 'text' || note) return $out.removeClass('rs_rx_out_html').text(note || out || '');
+    clearTimeout(rx.pvTimer);
+    rx.pvTimer = setTimeout(() => rxPreview($out, out), RX_PREVIEW_WAIT);
+}
+
+const RX_PREVIEW_WAIT = 250;
+const RX_PREVIEW_MAX_H = 600;
+
+function rxPreview($out, html) {
+    let fr = $out.find('iframe')[0];
+    if (!fr) {
+        $out.addClass('rs_rx_out_html').empty();
+        fr = document.createElement('iframe');
+        fr.className = 'rs_rx_frame';
+        fr.setAttribute('sandbox', 'allow-scripts');
+        $out.append(fr);
+    }
+    const cs = getComputedStyle(document.body);
+    const css = `body{margin:0;padding:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:1.6;color:${cs.getPropertyValue('--SmartThemeBodyColor') || cs.color}}q{color:${cs.getPropertyValue('--SmartThemeQuoteColor')}}img{max-width:100%}`;
+    fr.srcdoc = `<!doctype html><meta charset="utf-8"><base target="_blank"><style>${css}</style>${html}<script>new ResizeObserver(()=>parent.postMessage({rsH:document.documentElement.scrollHeight},'*')).observe(document.documentElement)<\/script>`;
 }
 
 async function rxEdAct(a) {
@@ -6047,6 +6300,7 @@ ${types.length > 1 ? `<div class="rs_pz_cats rs_on">${['', ...types].map(t => `<
 async function binRestore(x) {
     const d = x.data;
     const c = ctx();
+    if (x.type === 'theme') return thRestore(d);
     if (x.type === 'css') {
         const cur = bzLiveCss();
         if (cur && !(await binAdd({ type: 'css', label: '自定义 CSS', sub: `${cur.length} 字`, data: { css: cur } }))) return false;
@@ -7427,6 +7681,18 @@ function bindPanelEvents() {
             rxTest();
         })
         .on('input', '#rs_panel .rs_rx_f, #rs_panel .rs_rx_test', rxTest)
+        .on('click', '#rs_panel .rs_rx_view span', function () {
+            settings().rxView = this.dataset.v;
+            ctx().saveSettingsDebounced();
+            rxTest();
+        })
+        .on('click', '#rs_panel .rs_rx_usemes', () => {
+            const chat = ctx().chat || [];
+            const m = [...chat].reverse().find(x => !x.is_user && !x.is_system) || chat[chat.length - 1];
+            if (!m) return toastr.info('聊天里还没有楼层');
+            $('#rs_panel .rs_rx_test').val(String(m.mes ?? ''));
+            rxTest();
+        })
         .on('input', '#rs_panel .rs_rx_reptext', () => {
             if (rt.tool === 'find') rtFindRender(false);
         })
@@ -7455,6 +7721,8 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_bz_tabs span', function () {
             bz.tab = this.dataset.t;
             bz.open = null;
+            lib.list = false;
+            lib.ed = null;
             settings().bzTab = bz.tab;
             ctx().saveSettingsDebounced();
             $('#rs_panel .rs_bz_main').empty();
@@ -7488,7 +7756,10 @@ function bindPanelEvents() {
             bzEdRender();
         })
         .on('input', '#rs_panel .rs_bz_ta', bzEdInput)
-        .on('click', '#rs_panel .rs_bz_acts .rs_pz_card_btn', function () { bzEdAct(this.dataset.a); })
+        .on('click', '#rs_panel .rs_bz_acts .rs_pz_card_btn', function () {
+            if (lib.ed) libEdAct(this.dataset.a);
+            else bzEdAct(this.dataset.a);
+        })
         .on('click', '#rs_panel .rs_bz_mergebox .rs_chip', function () { bzMergeInto(this.dataset.g); })
         .on('input', '#rs_panel .rs_bz_rq', function () {
             bz.rq = this.value;
@@ -7581,6 +7852,49 @@ function bindPanelEvents() {
             tfUpload(this.files?.[0]);
             this.value = '';
         })
+        .on('click', '#rs_panel .rs_lib_open', () => {
+            lib.list = true;
+            $('#rs_panel .rs_bz_main').empty();
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_lib_back', () => {
+            lib.list = false;
+            $('#rs_panel .rs_bz_main').empty();
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_lib_new', () => {
+            lib.ed = 'new';
+            bzRender();
+        })
+        .on('input', '#rs_panel .rs_lib_q', function () {
+            lib.q = this.value;
+            clearTimeout(bz.qt);
+            bz.qt = setTimeout(libListRender, 150);
+        })
+        .on('click', '#rs_panel .rs_lib_cats .rs_chip', function () {
+            lib.cat = this.dataset.c;
+            libListRender();
+        })
+        .on('click', '#rs_panel .rs_lib_row', function () {
+            lib.ed = this.dataset.id;
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_lib_edback', () => {
+            lib.ed = null;
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_lib_into .rs_chip', function () { libInsert(this.dataset.g); })
+        .on('input', '#rs_panel .rs_th_q', function () {
+            th.q = this.value;
+            clearTimeout(bz.qt);
+            bz.qt = setTimeout(() => thRender(), 150);
+        })
+        .on('click', '#rs_panel .rs_th_row .rs_pz_card_btn', function () {
+            const n = this.closest('.rs_th_row').dataset.n;
+            if (this.dataset.a === 'use') thUse(n);
+            else thDel(n);
+        })
+        .on('click', '#rs_panel .rs_th_upd', thUpdate)
         .on('click', '#rs_panel .rs_bz_themebox .rs_chip', function () {
             if (this.classList.contains('rs_off')) return toastr.info('已经加过了');
             bzVarAdd(this.dataset.v, this.dataset.c || '#888888', true);
@@ -8523,6 +8837,10 @@ jQuery(() => {
     renderBall();
     document.addEventListener('selectionchange', guardSelection);
     cpBind();
+    window.addEventListener('message', e => {
+        const fr = [...document.querySelectorAll('#rs_panel .rs_rx_frame')].find(f => f.contentWindow === e.source);
+        if (fr && Number(e.data?.rsH) > 0) fr.style.height = `${Math.min(RX_PREVIEW_MAX_H, Number(e.data.rsH))}px`;
+    });
     const chatBox = chatEl();
     if (chatBox) {
         chatBox.addEventListener('scroll', onChatScroll, { passive: true });
