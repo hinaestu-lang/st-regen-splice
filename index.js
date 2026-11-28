@@ -32,6 +32,8 @@ const DEFAULTS = {
     selectGuard: true,
     editBodyOnly: true,
     branchChip: true,
+    jumpBar: true,
+    holdScroll: true,
     clicheWhole: true,
     clicheWords: [
         '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
@@ -6313,6 +6315,153 @@ function guardSelection() {
     sel.removeAllRanges();
     sel.addRange(nr);
 }
+const JUMP_SHOW_SCREENS = 1;
+const JUMP_GAP_PX = 8;
+const JUMP_FLASH_MS = 1600;
+const JUMP_LOAD_WAIT_MS = 3000;
+const HOLD_START_PX = 80;
+const HOLD_JUMP_PX = 120;
+const HOLD_FLING_PX = 400;
+const HOLD_FLING_MS = 800;
+const HOLD_AFTER_END_MS = 1500;
+const scr = { gen: false, held: false, touch: false, userAt: 0, liftAt: 0, top: 0, raf: 0, endTimer: 0 };
+
+const chatEl = () => document.getElementById('chat');
+const distBottom = el => el.scrollHeight - el.clientHeight - el.scrollTop;
+
+function scrUser(e) {
+    scr.userAt = Date.now();
+    if (e.type === 'touchstart') scr.touch = true;
+    if (e.type === 'touchend' || e.type === 'touchcancel') {
+        scr.touch = false;
+        scr.liftAt = scr.userAt;
+    }
+}
+
+function onChatScroll() {
+    const el = chatEl();
+    if (!el) return;
+    const now = Date.now();
+    const d = distBottom(el);
+    const byUser = scr.touch || now - scr.userAt < HOLD_FLING_MS;
+    if (scr.held) {
+        const limit = scr.touch ? Infinity : now - scr.liftAt < HOLD_FLING_MS ? HOLD_FLING_PX : HOLD_JUMP_PX;
+        if (d < 2 && el.scrollTop - scr.top > limit) {
+            el.scrollTop = scr.top;
+            return jumpSoon();
+        }
+        if (d < 30 && byUser) scr.held = false;
+    } else if (scr.gen && settings().holdScroll && d > HOLD_START_PX && byUser) scr.held = true;
+    scr.top = el.scrollTop;
+    jumpSoon();
+}
+
+function scrGenStart(dryRun) {
+    if (dryRun) return;
+    clearTimeout(scr.endTimer);
+    scr.gen = true;
+    scr.held = false;
+}
+
+function scrGenEnd() {
+    scr.gen = false;
+    clearTimeout(scr.endTimer);
+    scr.endTimer = setTimeout(() => {
+        scr.held = false;
+        jumpRender();
+    }, HOLD_AFTER_END_MS);
+}
+
+function jumpSoon() {
+    if (scr.raf) return;
+    scr.raf = requestAnimationFrame(() => {
+        scr.raf = 0;
+        jumpRender();
+    });
+}
+
+function topFloor(el) {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 12)?.closest?.('#chat .mes');
+    if (hit) return Number(hit.getAttribute('mesid'));
+    const first = [...el.querySelectorAll('.mes')].find(m => m.getBoundingClientRect().bottom > r.top);
+    return first ? Number(first.getAttribute('mesid')) : NaN;
+}
+
+function jumpRender() {
+    const el = chatEl();
+    const form = document.getElementById('send_form');
+    if (!settings().jumpBar || !el || !form || $('#rs_overlay').length) return $('#rs_jump').remove();
+    const far = distBottom(el) > el.clientHeight * JUMP_SHOW_SCREENS;
+    if (!far && !scr.held) return $('#rs_jump').remove();
+    let $j = $('#rs_jump');
+    if (!$j.length) {
+        $j = $(`<div id="rs_jump">
+  <div class="rs_jump_b fa-solid fa-angles-up" data-j="top" title="跳到最上面"></div>
+  <div class="rs_jump_n" data-j="go" title="跳到第几楼"></div>
+  <div class="rs_jump_b fa-solid fa-angles-down" data-j="bottom" title="回到底部"></div>
+</div>`).appendTo('body');
+    }
+    const id = topFloor(el);
+    $j.find('.rs_jump_n').text(Number.isInteger(id) ? `第 ${id} 楼` : '跳楼层');
+    $j.toggleClass('rs_held', scr.held && scr.gen);
+    $j.css('bottom', `${Math.max(JUMP_GAP_PX, window.innerHeight - form.getBoundingClientRect().top + JUMP_GAP_PX)}px`);
+}
+
+function waitMore(el, before) {
+    return new Promise(res => {
+        const t0 = Date.now();
+        const tick = () => {
+            const first = Number(el.querySelector('.mes')?.getAttribute('mesid'));
+            if (first !== before || Date.now() - t0 > JUMP_LOAD_WAIT_MS) return res(first !== before);
+            setTimeout(tick, 50);
+        };
+        tick();
+    });
+}
+
+async function jumpTo(id) {
+    const c = ctx();
+    const el = chatEl();
+    if (!el || !c.chat.length) return;
+    id = Math.max(0, Math.min(c.chat.length - 1, id));
+    scr.held = false;
+    let m = el.querySelector(`.mes[mesid="${id}"]`);
+    while (!m) {
+        const more = document.getElementById('show_more_messages');
+        if (!more) break;
+        const before = Number(el.querySelector('.mes')?.getAttribute('mesid'));
+        $(more).trigger('click');
+        if (!(await waitMore(el, before))) break;
+        m = el.querySelector(`.mes[mesid="${id}"]`);
+    }
+    if (!m) return toastr.warning(`没找到第 ${id} 楼`);
+    m.scrollIntoView({ block: 'start' });
+    m.classList.add('rs_jump_hit');
+    setTimeout(() => m.classList.remove('rs_jump_hit'), JUMP_FLASH_MS);
+    scr.top = el.scrollTop;
+    jumpRender();
+}
+
+async function jumpAct(a) {
+    const el = chatEl();
+    if (!el) return;
+    if (a === 'bottom') {
+        scr.held = false;
+        el.scrollTop = el.scrollHeight;
+        scr.top = el.scrollTop;
+        return jumpRender();
+    }
+    if (a === 'top') return jumpTo(0);
+    const n = ctx().chat.length;
+    const cur = topFloor(el);
+    const v = await askInput(`跳到第几楼（0–${n - 1}）`, Number.isInteger(cur) ? String(cur) : '');
+    if (v === null || !String(v).trim()) return;
+    const id = Number.parseInt(String(v).trim(), 10);
+    if (!Number.isInteger(id)) return toastr.warning('填个数字');
+    jumpTo(id);
+}
+
 function addWandMenu() {
     const $menu = $('#extensionsMenu');
     if (!$menu.length || $('#rs_wand_open').length) return;
@@ -6558,6 +6707,8 @@ function renderSettings() {
       <label class="checkbox_label"><input type="checkbox" id="rs_selguard_on"> 聊天里选字只选在同一楼（防止乱跳、选太多）</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_vchip_on"> 有多个版本的楼层显示版本切换</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_bchip_on"> 有分支的楼层显示分支切换</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_jump_on"> 往上翻时显示楼层跳转（最上 / 第几楼 / 最下）</label>
+      <label class="checkbox_label"><input type="checkbox" id="rs_hold_on"> 生成时往上翻，不把我拉回底部</label>
       <div class="rs_set_h">编辑</div>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_on"> 楼层编辑时标出八股词</label>
       <label class="checkbox_label"><input type="checkbox" id="rs_cliche_whole"> 八股词整句标出</label>
@@ -6655,6 +6806,16 @@ function renderSettings() {
         ctx().saveSettingsDebounced();
         refreshBranches();
     });
+    $('#rs_jump_on').prop('checked', s.jumpBar).on('change', function () {
+        settings().jumpBar = this.checked;
+        ctx().saveSettingsDebounced();
+        jumpRender();
+    });
+    $('#rs_hold_on').prop('checked', s.holdScroll).on('change', function () {
+        settings().holdScroll = this.checked;
+        ctx().saveSettingsDebounced();
+        if (!this.checked) scr.held = false;
+    });
     $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () { setClicheSetting('clicheOn', this.checked); });
     $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () { setClicheSetting('clicheWhole', this.checked); });
     $('#rs_cliche_words').val(s.clicheWords).on('input', function () { setClicheSetting('clicheWords', this.value); });
@@ -6695,6 +6856,14 @@ jQuery(() => {
     bindPanelEvents();
     renderBall();
     document.addEventListener('selectionchange', guardSelection);
+    const chatBox = chatEl();
+    if (chatBox) {
+        chatBox.addEventListener('scroll', onChatScroll, { passive: true });
+        ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'wheel', 'pointerdown', 'keydown']
+            .forEach(t => chatBox.addEventListener(t, scrUser, { passive: true }));
+    }
+    $(document).on('click', '#rs_jump [data-j]', function () { jumpAct(this.dataset.j); });
+    window.visualViewport?.addEventListener('resize', jumpSoon);
     window.visualViewport?.addEventListener('resize', () => { if (tap) keepInView(); });
     addWandMenu();
     setTimeout(addWandMenu, 1500);
@@ -6704,6 +6873,7 @@ jQuery(() => {
     });
 
     c.eventSource.on(ev.GENERATION_STARTED, onGenStarted);
+    c.eventSource.on(ev.GENERATION_STARTED, (_t, _o, dryRun) => scrGenStart(dryRun));
     c.eventSource.on(ev.CHARACTER_MESSAGE_RENDERED, onCharRendered);
     [ev.CHARACTER_MESSAGE_RENDERED, ev.USER_MESSAGE_RENDERED, ev.MESSAGE_SWIPED, ev.MESSAGE_UPDATED, ev.MESSAGE_EDITED]
         .filter(Boolean)
@@ -6721,8 +6891,12 @@ jQuery(() => {
     refreshBranches();
     c.eventSource.on(ev.GENERATION_ENDED, onGenEnded);
     c.eventSource.on(ev.GENERATION_STOPPED, onGenEnded);
+    c.eventSource.on(ev.GENERATION_ENDED, scrGenEnd);
+    c.eventSource.on(ev.GENERATION_STOPPED, scrGenEnd);
     c.eventSource.on(ev.CHAT_CHANGED, () => {
         pending = null;
+        scr.held = false;
+        setTimeout(jumpRender, 300);
         injectButtons();
         if (state.target?.kind === 'msg') {
             closePanel(true, true);
