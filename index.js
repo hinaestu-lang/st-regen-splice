@@ -23,6 +23,9 @@ const DEFAULTS = {
     pzRadio: {},
     snapKeep: 30,
     lastKind: 'msg',
+    bzTab: 'seg',
+    cpRecent: [],
+    cpSaved: [],
     findExclude: '',
     readerBody: 'content',
     libMax: 500,
@@ -281,7 +284,7 @@ const BIN_KEY = 'bin';
 const BIN_DAYS = 30;
 const BIN_MAX = 300;
 const BIN_PREVIEW = 60;
-const BIN_TYPES = { fav: '收藏', card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
+const BIN_TYPES = { css: '美化 CSS', fav: '收藏', card: '角色卡', persona: '用户人设', chat: '聊天文件', book: '世界书', pz: '预设条目', wi: '世界书条目', rx: '正则', swipe: '楼层版本', ver: '★版本', snap: '存档' };
 
 async function binAll() {
     const cut = Date.now() - BIN_DAYS * 864e5;
@@ -1992,6 +1995,7 @@ const isDirty = () => {
     if (!t) return false;
     if (t.kind === 'preset') return !!pz.tgt?.dirty;
     if (t.kind === 'regex') return rx.dirty;
+    if (t.kind === 'css') return bzDirty();
     if (t.kind === 'set' || t.kind === 'bin' || t.kind === 'fav') return false;
     return !!bodyEl() && bodyEl().value !== t.initial;
 };
@@ -2009,6 +2013,7 @@ function ensureShell() {
         <option value="world">世界书</option>
         <option value="preset">预设缝合</option>
         <option value="regex">正则</option>
+        <option value="css">美化</option>
         <option value="fav">收藏</option>
         <option value="bin">回收站</option>
         <option value="set">设置</option>
@@ -2136,6 +2141,7 @@ function ensureShell() {
     </div>
     <div class="rs_bin"></div>
     <div class="rs_fav"></div>
+    <div class="rs_bz"></div>
     <div class="rs_rx">
       <div class="rs_bar rs_pz_head">
         <div class="rs_rx_tabs"><span data-t="g">全局</span><span data-t="p">预设</span><span data-t="c">角色</span></div>
@@ -2208,8 +2214,9 @@ function showTarget(t) {
     clearSel();
     if (state.target?.kind === 'preset' && t.kind !== 'preset') pzReset();
     if (state.target?.kind === 'regex' && t.kind !== 'regex') rxReset();
+    if (state.target?.kind === 'css' && t.kind !== 'css') bzReset();
     $('#rs_panel').toggleClass('rs_mode_preset', t.kind === 'preset').toggleClass('rs_mode_regex', t.kind === 'regex')
-        .toggleClass('rs_mode_set', t.kind === 'set').toggleClass('rs_mode_bin', t.kind === 'bin').toggleClass('rs_mode_fav', t.kind === 'fav');
+        .toggleClass('rs_mode_set', t.kind === 'set').toggleClass('rs_mode_bin', t.kind === 'bin').toggleClass('rs_mode_fav', t.kind === 'fav').toggleClass('rs_mode_css', t.kind === 'css');
     if (t.kind === 'set' || t.kind === 'bin' || t.kind === 'fav') {
         state.target = t;
         $('#rs_panel .rs_kind').val(t.kind);
@@ -2221,7 +2228,7 @@ function showTarget(t) {
         } else binRender();
         return;
     }
-    if (t.kind === 'preset' || t.kind === 'regex') {
+    if (t.kind === 'preset' || t.kind === 'regex' || t.kind === 'css') {
         state.target = t;
         $('#rs_panel .rs_kind').val(t.kind);
         $('#rs_panel .rs_title').text(t.subtitle);
@@ -2230,6 +2237,7 @@ function showTarget(t) {
             ctx().saveSettingsDebounced();
         }
         if (t.kind === 'preset') openStitch();
+        else if (t.kind === 'css') openBeauty();
         else openRegex();
         return;
     }
@@ -2604,6 +2612,7 @@ async function closePanel(force = false, keepDraft = false) {
     if (!force && isDirty() && !(await askConfirm('有改动还没保存，确定关闭吗？'))) return;
     pzReset();
     rxReset();
+    bzReset();
     shelfClose();
     if (keepDraft) saveDraftNow();
     else clearDraft();
@@ -4429,16 +4438,17 @@ function rxOpenEd(id) {
         this.value = f === 'trimStrings' ? (v || []).join('\n') : f === 'substituteRegex' ? String(Number(v) || 0) : v ?? '';
     });
     $('#rs_panel .rs_rx').addClass('rs_rx_editing');
-    Object.assign(rt, { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] });
+    Object.assign(rt, { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [], host: $('#rs_panel .rs_rx_rep')[0], fullEl: $('#rs_panel .rs_rx_ed')[0], onChange: rxTest });
     $('#rs_panel .rs_rx_ed').removeClass('rs_rx_full');
     rxTest();
     rtRefresh();
 }
 
-const rt = { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] };
+const rt = { tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [], host: null, fullEl: null, onChange: null };
 const RT_IMG = /https?:\/\/[^\s"'`<>()\\]+/g;
 const RT_COLOR = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])|\b(?:rgba?|hsla?)\([^()]*\)/g;
-const rtTa = () => $('#rs_panel .rs_rx_reptext')[0];
+const rtTa = () => rt.host?.querySelector('.rs_rx_reptext') || null;
+const rt$ = sel => $(rt.host).find(sel);
 
 function rtImgHits(text) {
     const out = [];
@@ -4479,7 +4489,7 @@ function rtSet(v, noUndo) {
     if (!noUndo) rt.undo.push(ta.value);
     if (rt.undo.length > 50) rt.undo.shift();
     ta.value = v;
-    rxTest();
+    rt.onChange?.();
     rtRefresh();
 }
 
@@ -4512,14 +4522,14 @@ function rtRefresh() {
     const text = ta.value;
     rt.imgs = rtGroup(rtImgHits(text));
     rt.cols = rtGroup(rtColorHits(text)).map(x => ({ ...x, c: rtParse(x.s) })).filter(x => x.c);
-    const $row = $('#rs_panel .rs_rx_lbrow');
+    const $row = rt$('.rs_rx_lbrow');
     $row.find('[data-t="img"] .rs_rx_n').text(rt.imgs.length ? ` ${rt.imgs.length}` : '');
     $row.find('[data-t="color"] .rs_rx_n').text(rt.cols.length ? ` ${rt.cols.length}` : '');
     $row.find('[data-t="undo"]').toggleClass('rs_off', !rt.undo.length);
     $row.find('[data-t="full"]').toggleClass('fa-expand', !rt.full).toggleClass('fa-compress', rt.full);
     $row.find('.rs_chip').each(function () { $(this).toggleClass('rs_on', rt.tool === this.dataset.t); });
     if (rt.tool === 'find') rtFindRender(false);
-    else $('#rs_panel .rs_rx_hl').empty().hide();
+    else rt$('.rs_rx_hl').empty().hide();
 }
 
 function rtToolHtml() {
@@ -4530,14 +4540,14 @@ function rtToolHtml() {
             : '<div class="rs_rx_none">没找到图片链接</div>';
     }
     if (rt.tool === 'color') {
-        return rt.cols.length ? rt.cols.map((x, i) => `<div class="rs_rx_crow" data-i="${i}"><label class="rs_rx_sw" style="--c:${escapeHtml(rtFormat('rgb', x.c))}"><input type="color" class="rs_rx_cin" value="${rtFormat('hex', { ...x.c, a: 1 })}"></label><code class="rs_rx_cs">${escapeHtml(x.s)}</code><span class="rs_rx_cnt">${x.ords.length > 1 ? `×${x.ords.length}` : ''}</span><input type="range" class="rs_rx_ca" min="0" max="100" value="${Math.round(x.c.a * 100)}" title="透明度"></div>`).join('')
+        return rt.cols.length ? rt.cols.map((x, i) => `<div class="rs_rx_crow" data-i="${i}"><span class="rs_rx_sw" style="--c:${escapeHtml(rtFormat('rgb', x.c))}" title="调色"></span><code class="rs_rx_cs">${escapeHtml(x.s)}</code><span class="rs_rx_cnt">${x.ords.length > 1 ? `×${x.ords.length}` : ''}</span></div>`).join('')
             : '<div class="rs_rx_none">没找到颜色</div>';
     }
     return '';
 }
 
 function rtTbox() {
-    $('#rs_panel .rs_rx_tbox').html(rtToolHtml()).find('.rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
+    rt$('.rs_rx_tbox').html(rtToolHtml()).find('.rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
 }
 
 function rtTool(t) {
@@ -4549,18 +4559,18 @@ function rtTool(t) {
     }
     if (t === 'full') {
         rt.full = !rt.full;
-        $('#rs_panel .rs_rx_ed').toggleClass('rs_rx_full', rt.full);
+        $(rt.fullEl).toggleClass('rs_rx_full', rt.full);
         return rtRefresh();
     }
     rt.tool = rt.tool === t ? null : t;
     rt.fi = 0;
     rtTbox();
     rtRefresh();
-    if (rt.tool === 'find') $('#rs_panel .rs_rx_fq').trigger('focus');
+    if (rt.tool === 'find') rt$('.rs_rx_fq').trigger('focus');
 }
 
 function rtFindHits() {
-    const q = String($('#rs_panel .rs_rx_fq').val() || '').toLowerCase();
+    const q = String(rt$('.rs_rx_fq').val() || '').toLowerCase();
     const text = rtTa()?.value.toLowerCase() || '';
     const out = [];
     if (!q) return out;
@@ -4570,11 +4580,11 @@ function rtFindHits() {
 
 function rtFindRender(scroll) {
     const ta = rtTa();
-    const hl = $('#rs_panel .rs_rx_hl')[0];
+    const hl = rt$('.rs_rx_hl')[0];
     if (!ta || !hl) return;
     const hits = rtFindHits();
     if (rt.fi >= hits.length) rt.fi = Math.max(0, hits.length - 1);
-    $('#rs_panel .rs_rx_fn').text(hits.length ? `${rt.fi + 1}/${hits.length}` : String($('#rs_panel .rs_rx_fq').val() || '') ? '0' : '');
+    rt$('.rs_rx_fn').text(hits.length ? `${rt.fi + 1}/${hits.length}` : String(rt$('.rs_rx_fq').val() || '') ? '0' : '');
     const text = ta.value;
     let html = '';
     let last = 0;
@@ -4596,7 +4606,7 @@ function rtFindAct(x) {
         rt.fi = (rt.fi + (x === 'next' ? 1 : -1) + hits.length) % hits.length;
         return rtFindRender(true);
     }
-    const to = String($('#rs_panel .rs_rx_fr').val() ?? '');
+    const to = String(rt$('.rs_rx_fr').val() ?? '');
     const text = rtTa().value;
     const pick = x === 'all' ? hits : [hits[rt.fi]];
     let out = '';
@@ -4627,40 +4637,977 @@ async function rtImgPaste(row) {
     rtImgSet(row, t);
 }
 
-function rtColorLive(row) {
+function rtColorPick(row) {
     const x = rt.cols[Number(row.dataset.i)];
     if (!x) return;
-    const hex = $(row).find('.rs_rx_cin').val();
-    const a = Number($(row).find('.rs_rx_ca').val()) / 100;
-    const c = { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16), a };
-    const to = rtFormat(x.s.startsWith('#') ? 'hex' : 'rgb', c);
-    if (to === x.s) return;
-    const first = row.dataset.live !== '1';
-    row.dataset.live = '1';
-    const ta = rtTa();
-    const text = ta.value;
-    const next = rtSwap(text, rtColorHits(text), x.ords, to);
-    if (first) rt.undo.push(text);
-    ta.value = next;
-    x.s = to;
-    x.c = c;
-    $(row).find('.rs_rx_cs').text(to);
-    $(row).find('.rs_rx_sw').css('--c', rtFormat('rgb', c));
-    $('#rs_panel .rs_rx_lbrow [data-t="undo"]').removeClass('rs_off');
-    rxTest();
+    let pushed = false;
+    cpOpen(x.c, {
+        onInput: c => {
+            const to = rtFormat(x.s.startsWith('#') ? 'hex' : 'rgb', c);
+            const ta = rtTa();
+            if (!ta || to === x.s) return;
+            const text = ta.value;
+            if (!pushed) {
+                rt.undo.push(text);
+                pushed = true;
+            }
+            ta.value = rtSwap(text, rtColorHits(text), x.ords, to);
+            x.s = to;
+            x.c = c;
+            $(row).find('.rs_rx_cs').text(to);
+            $(row).find('.rs_rx_sw').css('--c', rtFormat('rgb', c));
+            $(rt.host).find('.rs_rx_lbrow [data-t="undo"]').removeClass('rs_off');
+            rt.onChange?.();
+        },
+        onDone: () => {
+            rtRefresh();
+            rtTbox();
+        },
+    });
 }
 
-function rtColorDone(row) {
-    if (row.dataset.live !== '1') return;
-    row.dataset.live = '';
+const CP_RECENT_MAX = 16;
+const CP_SAVED_MAX = 40;
+const CP_WHEEL_PX = 440;
+const CP_THEME_VARS = [
+    ['--SmartThemeBodyColor', '正文'],
+    ['--SmartThemeEmColor', '斜体'],
+    ['--SmartThemeQuoteColor', '引号'],
+    ['--SmartThemeUnderlineColor', '下划线'],
+    ['--SmartThemeBlurTintColor', '界面背景'],
+    ['--SmartThemeChatTintColor', '聊天背景'],
+    ['--SmartThemeUserMesBlurTintColor', '用户楼'],
+    ['--SmartThemeBotMesBlurTintColor', '角色楼'],
+    ['--SmartThemeShadowColor', '阴影'],
+    ['--SmartThemeBorderColor', '边框'],
+];
+const cp = { h: 0, s: 0, v: 0, a: 1, old: null, alpha: true, tab: 'wheel', del: false, onInput: null, onDone: null, raf: 0, wheelV: -1, extra: [] };
+
+function cpRgbToHsv({ r, g, b }) {
+    const [R, G, B] = [r / 255, g / 255, b / 255];
+    const mx = Math.max(R, G, B);
+    const d = mx - Math.min(R, G, B);
+    let h = 0;
+    if (d) h = mx === R ? ((G - B) / d) % 6 : mx === G ? (B - R) / d + 2 : (R - G) / d + 4;
+    return { h: (h * 60 + 360) % 360, s: mx ? d / mx : 0, v: mx };
+}
+
+function cpHsvToRgb(h, s, v) {
+    const f = n => {
+        const k = (n + h / 60) % 6;
+        return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255);
+    };
+    return { r: f(5), g: f(3), b: f(1) };
+}
+
+function cpHsl() {
+    const l = cp.v * (1 - cp.s / 2);
+    const s = l === 0 || l === 1 ? 0 : (cp.v - l) / Math.min(l, 1 - l);
+    return { h: cp.h, s, l };
+}
+
+function cpSetHsl(h, s, l) {
+    const v = l + s * Math.min(l, 1 - l);
+    Object.assign(cp, { h, s: v ? 2 * (1 - l / v) : 0, v });
+}
+
+const cpRgb = () => ({ ...cpHsvToRgb(cp.h, cp.s, cp.v), a: cp.alpha ? Math.round(cp.a * 100) / 100 : 1 });
+const cpCss = c => rtFormat('rgb', c);
+
+function cpSetRgb(c, keepHue) {
+    const hsv = cpRgbToHsv(c);
+    Object.assign(cp, hsv, { a: cp.alpha ? c.a ?? 1 : 1 });
+    if (keepHue && !hsv.s) cp.h = keepHue;
+}
+
+function cpOpen(color, opt = {}) {
+    const c = (typeof color === 'string' ? rtParse(color) : color) || { r: 128, g: 128, b: 128, a: 1 };
+    Object.assign(cp, { alpha: opt.alpha !== false, onInput: opt.onInput || null, onDone: opt.onDone || null, del: false, wheelV: -1, extra: opt.extra || [] });
+    cpSetRgb(c);
+    cp.old = cpRgb();
+    $('#rs_cp').remove();
+    $(document.getElementById('rs_panel') || document.body).append(`<div id="rs_cp"><div class="rs_cp_box">
+  <div class="rs_cp_top"><span class="rs_cp_sw rs_cp_old" title="还原成原来的颜色"></span><span class="rs_cp_sw rs_cp_new"></span><input type="text" class="rs_cp_in" spellcheck="false" autocomplete="off" placeholder="#hex / rgb() / hsl()"><span class="rs_icon fa-solid fa-check rs_cp_ok" title="完成"></span></div>
+  <div class="rs_rx_tabs rs_cp_tabs"><span data-t="wheel">色轮</span><span data-t="swatch">色块</span><span data-t="slider">滑块</span></div>
+  <div class="rs_cp_body"></div>
+</div></div>`);
+    $('#rs_cp .rs_cp_old').css('--c', cpCss(cp.old));
+    cpBody();
+}
+
+function cpClose() {
+    const $cp = $('#rs_cp');
+    if (!$cp.length) return;
+    cancelAnimationFrame(cp.raf);
+    cp.raf = 0;
+    const c = cpRgb();
+    cp.onInput?.(c);
+    const css = cpCss(c);
+    const s = settings();
+    s.cpRecent = [css, ...(s.cpRecent || []).filter(x => x !== css)].slice(0, CP_RECENT_MAX);
+    ctx().saveSettingsDebounced();
+    $cp.remove();
+    const done = cp.onDone;
+    cp.onInput = cp.onDone = null;
+    done?.(c);
+}
+
+function cpRow(k, label, min, max, step) {
+    return `<label class="rs_cp_row"><span>${label}</span><input type="range" class="rs_cp_r" data-k="${k}" min="${min}" max="${max}" step="${step}"><b class="rs_cp_rv" data-k="${k}"></b></label>`;
+}
+
+function cpDots(list) {
+    return list.map(c => `<span class="rs_cp_dot" data-c="${escapeHtml(c)}" style="--c:${escapeHtml(c)}"></span>`).join('');
+}
+
+function cpBody() {
+    const s = settings();
+    const alpha = cp.alpha ? cpRow('a', '透明度', 0, 100, 1) : '';
+    let html = '';
+    if (cp.tab === 'wheel') {
+        html = `<div class="rs_cp_wheelbox"><canvas class="rs_cp_wheel" width="${CP_WHEEL_PX}" height="${CP_WHEEL_PX}"></canvas><span class="rs_cp_knob"></span></div>${cpRow('v', '亮度', 0, 100, 1)}${alpha}`;
+    } else if (cp.tab === 'slider') {
+        html = `${cpRow('h', '色相', 0, 360, 1)}${cpRow('s', '饱和度', 0, 100, 1)}${cpRow('l', '明度', 0, 100, 1)}${alpha}`;
+    } else {
+        const root = getComputedStyle(document.documentElement);
+        const body = getComputedStyle(document.body);
+        const theme = CP_THEME_VARS.map(([v]) => (root.getPropertyValue(v) || body.getPropertyValue(v)).trim()).filter(v => v && rtParse(v));
+        const saved = s.cpSaved || [];
+        const sec = (t, list, tail = '') => `<div class="rs_cp_h"><span>${t}</span>${tail}</div><div class="rs_cp_grid${t === '收藏' && cp.del ? ' rs_cp_deling' : ''}">${list.length ? cpDots(list) : '<span class="rs_cp_none">还没有</span>'}</div>`;
+        html = sec('最近', s.cpRecent || [])
+            + cp.extra.map(x => sec(x.label, x.colors)).join('')
+            + sec('主题', [...new Set(theme)])
+            + sec('收藏', saved, `<span class="rs_bar_spacer"></span><span class="rs_chip rs_cp_save">收藏当前</span>${saved.length ? `<span class="rs_chip rs_cp_delm${cp.del ? ' rs_on' : ''}">${cp.del ? '完成' : '删除'}</span>` : ''}`);
+    }
+    $('#rs_cp .rs_cp_tabs span').each(function () { $(this).toggleClass('rs_on', this.dataset.t === cp.tab); });
+    $('#rs_cp .rs_cp_body').html(html);
+    cp.wheelV = -1;
+    cpSync(true);
+}
+
+function cpDrawWheel() {
+    const cv = $('#rs_cp .rs_cp_wheel')[0];
+    if (!cv || cp.wheelV === cp.v) return;
+    cp.wheelV = cp.v;
+    const g = cv.getContext('2d');
+    const n = CP_WHEEL_PX;
+    const img = g.createImageData(n, n);
+    const r = n / 2;
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+            const dx = x - r + 0.5;
+            const dy = y - r + 0.5;
+            const d = Math.hypot(dx, dy);
+            if (d > r) continue;
+            const c = cpHsvToRgb((Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360, d / r, cp.v);
+            const p = (y * n + x) * 4;
+            img.data[p] = c.r;
+            img.data[p + 1] = c.g;
+            img.data[p + 2] = c.b;
+            img.data[p + 3] = d > r - 1 ? Math.round((r - d) * 255) : 255;
+        }
+    }
+    g.putImageData(img, 0, 0);
+}
+
+function cpSync(fromUi) {
+    const c = cpRgb();
+    const css = cpCss(c);
+    const $cp = $('#rs_cp');
+    $cp.find('.rs_cp_new').css('--c', css);
+    const $in = $cp.find('.rs_cp_in');
+    if (!$in.is(':focus')) $in.val(c.a < 1 ? css : rtFormat('hex', c));
+    const hsl = cpHsl();
+    const vals = { h: Math.round(cp.h), s: Math.round(hsl.s * 100), l: Math.round(hsl.l * 100), v: Math.round(cp.v * 100), a: Math.round(cp.a * 100) };
+    const solid = cpCss({ ...c, a: 1 });
+    const tracks = {
+        h: 'linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)',
+        s: `linear-gradient(90deg,${cpCss({ ...cpHsvToRgb(0, 0, hsl.l), a: 1 })},hsl(${cp.h} 100% ${vals.l}%))`,
+        l: `linear-gradient(90deg,#000,hsl(${cp.h} ${vals.s}% 50%),#fff)`,
+        v: `linear-gradient(90deg,#000,${cpCss({ ...cpHsvToRgb(cp.h, cp.s, 1), a: 1 })})`,
+        a: `linear-gradient(90deg,transparent,${solid}),repeating-conic-gradient(#bbb 0 25%,#fff 0 50%) 0 0/10px 10px`,
+    };
+    $cp.find('.rs_cp_r').each(function () {
+        const k = this.dataset.k;
+        if (fromUi !== k) this.value = vals[k];
+        this.style.background = tracks[k];
+    });
+    $cp.find('.rs_cp_rv').each(function () { this.textContent = this.dataset.k === 'h' ? `${vals.h}°` : `${vals[this.dataset.k]}%`; });
+    const box = $cp.find('.rs_cp_wheelbox')[0];
+    if (box) {
+        cpDrawWheel();
+        const rad = cp.h * Math.PI / 180;
+        $cp.find('.rs_cp_knob').css({ left: `${50 + Math.cos(rad) * cp.s * 50}%`, top: `${50 + Math.sin(rad) * cp.s * 50}%`, '--c': solid });
+    }
+    if (fromUi === true) return;
+    cancelAnimationFrame(cp.raf);
+    cp.raf = requestAnimationFrame(() => {
+        cp.raf = 0;
+        cp.onInput?.(cpRgb());
+    });
+}
+
+function cpWheelAt(e) {
+    const cv = $('#rs_cp .rs_cp_wheel')[0];
+    if (!cv) return;
+    const r = cv.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2);
+    const dy = e.clientY - (r.top + r.height / 2);
+    cp.h = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    cp.s = Math.min(1, Math.hypot(dx, dy) / (r.width / 2));
+    if (!cp.v) cp.v = 1;
+    cpSync();
+}
+
+function cpSlide(k, val) {
+    const n = Number(val);
+    if (k === 'a') cp.a = n / 100;
+    else if (k === 'v') cp.v = n / 100;
+    else {
+        const hsl = cpHsl();
+        const next = { h: cp.h, s: hsl.s, l: hsl.l, [k]: k === 'h' ? n : n / 100 };
+        cpSetHsl(next.h, next.s, next.l);
+        if (k === 'h') cp.h = n;
+    }
+    cpSync(k);
+}
+
+function cpTyped(v) {
+    const c = rtParse(String(v || '').trim());
+    if (!c) return toastr.warning('认不出这个颜色');
+    cpSetRgb(c, cp.h);
+    cpSync();
+}
+
+function cpPick(css) {
+    const s = settings();
+    if (cp.del) {
+        s.cpSaved = (s.cpSaved || []).filter(x => x !== css);
+        ctx().saveSettingsDebounced();
+        if (!s.cpSaved.length) cp.del = false;
+        return cpBody();
+    }
+    const c = rtParse(css);
+    if (!c) return;
+    cpSetRgb(c, cp.h);
+    cpSync();
+}
+
+function cpSaveCur() {
+    const s = settings();
+    const css = cpCss(cpRgb());
+    s.cpSaved = [css, ...(s.cpSaved || []).filter(x => x !== css)].slice(0, CP_SAVED_MAX);
+    ctx().saveSettingsDebounced();
+    cpBody();
+}
+
+function cpBind() {
+    let drag = false;
+    $(document)
+        .on('click', '#rs_cp', function (e) { if (e.target === this) cpClose(); })
+        .on('click', '#rs_cp .rs_cp_ok', cpClose)
+        .on('click', '#rs_cp .rs_cp_old', () => {
+            cpSetRgb(cp.old);
+            cpSync();
+        })
+        .on('click', '#rs_cp .rs_cp_tabs span', function () {
+            cp.tab = this.dataset.t;
+            cpBody();
+        })
+        .on('input', '#rs_cp .rs_cp_r', function () { cpSlide(this.dataset.k, this.value); })
+        .on('change', '#rs_cp .rs_cp_in', function () { cpTyped(this.value); })
+        .on('keydown', '#rs_cp .rs_cp_in', function (e) {
+            if (e.key === 'Enter') this.blur();
+        })
+        .on('click', '#rs_cp .rs_cp_dot', function () { cpPick(this.dataset.c); })
+        .on('click', '#rs_cp .rs_cp_save', cpSaveCur)
+        .on('click', '#rs_cp .rs_cp_delm', () => {
+            cp.del = !cp.del;
+            cpBody();
+        })
+        .on('pointerdown', '#rs_cp .rs_cp_wheel', function (e) {
+            drag = true;
+            this.setPointerCapture?.(e.pointerId);
+            cpWheelAt(e);
+        })
+        .on('pointermove', '#rs_cp .rs_cp_wheel', e => { if (drag) cpWheelAt(e); })
+        .on('pointerup pointercancel', '#rs_cp .rs_cp_wheel', () => { drag = false; });
+}
+
+const BZ_UNDO_MAX = 100;
+const BZ_HALF_DVH = 50;
+const BZ_SNIP = 36;
+const BZ_TITLE_MAX = 40;
+const BZ_GLOBAL = /^(?::root|html|body|\*)$/;
+const BZ_TEXT_TAGS = /^(?:q|em|strong|i|b|u|s|del|p|blockquote|code|pre|hr|h[1-6]|a|span|small|mark|ul|ol|li|table|td|th|tr|img|font|summary|details)$/i;
+const BZ_PARTS = [
+    [/#send_form|#send_textarea|#form_sheld|#leftSendForm|#rightSendForm|#send_but|#options_button|#extensionsMenuButton|#nonQRFormItems/, '输入框'],
+    [/\.avatar|\.mesAvatarWrapper/, '头像'],
+    [/\.ch_name|\.name_text|\.timestamp|\.mesIDDisplay|\.tokenCounterDisplay|\.mes_timer/, '名字栏'],
+    [/\.mes_buttons|\.extraMesButtons|\.mes_button|\.mes_edit|\.swipe_left|\.swipe_right|\.swipes-counter|\.swipe_right_block/, '楼层按钮'],
+    [/\.mes_reasoning/, '思维链'],
+    [/\.mes_text|\.mes_block/, '正文'],
+    [/\.mes(?![\w-])|#chat(?![\w-])|\.last_mes|is_user|is_system/, '楼层'],
+    [/#top-bar|#top-settings-holder|\.drawer-toggle|\.drawer-icon/, '顶栏'],
+    [/#left-nav-panel|#right-nav-panel|\.drawer-content|#rm_|#character_popup/, '侧栏'],
+    [/\.popup|dialog|#dialogue_popup|#toast/, '弹窗'],
+    [/#bg1|#bg_custom|#bg(?![\w-])/, '背景'],
+    [/scrollbar/, '滚动条'],
+];
+const bz = { tab: 'seg', blocks: [], base: '', orig: '', undo: [], redo: [], open: null, part: 0, q: '', rq: '', typing: false, tt: 0, raf: 0, half: false, live: false, merging: false, themeAdd: false, qt: 0, varLive: false };
+
+function bzItems(css) {
+    const out = [];
+    const n = css.length;
+    let i = 0;
+    while (i < n) {
+        while (i < n && /\s/.test(css[i])) i++;
+        if (i >= n) break;
+        const start = i;
+        if (css.startsWith('/*', i)) {
+            const e = css.indexOf('*/', i + 2);
+            i = e < 0 ? n : e + 2;
+            const line = css.slice(css.lastIndexOf('\n', start - 1) + 1, start);
+            out.push({ t: 'c', s: start, e: i, text: css.slice(start, i), nl: !line.trim() });
+            continue;
+        }
+        let depth = 0;
+        let q = '';
+        let paren = 0;
+        let open = -1;
+        for (; i < n; i++) {
+            const ch = css[i];
+            if (q) {
+                if (ch === '\\') i++;
+                else if (ch === q) q = '';
+                continue;
+            }
+            if (ch === '"' || ch === "'") {
+                q = ch;
+                continue;
+            }
+            if (ch === '/' && css[i + 1] === '*') {
+                const e = css.indexOf('*/', i + 2);
+                i = (e < 0 ? n : e + 2) - 1;
+                continue;
+            }
+            if (ch === '(') paren++;
+            else if (ch === ')') paren = Math.max(0, paren - 1);
+            else if (paren) continue;
+            else if (ch === '{') {
+                if (!depth && open < 0) open = i;
+                depth++;
+            } else if (ch === '}') {
+                depth--;
+                if (depth <= 0) {
+                    i++;
+                    break;
+                }
+            } else if (ch === ';' && !depth) {
+                i++;
+                break;
+            }
+        }
+        const text = css.slice(start, i);
+        out.push({ t: 'r', s: start, e: i, text, open: open < 0 ? -1 : open - start, head: (open < 0 ? text : css.slice(start, open)).replace(/\/\*[\s\S]*?\*\//g, '').trim() });
+    }
+    return out;
+}
+
+function bzTitle(it) {
+    if (it.t !== 'c' || !it.nl) return null;
+    const inner = it.text.slice(2, it.text.endsWith('*/') ? -2 : undefined);
+    if (inner.startsWith('@off') || /[{};\n]/.test(inner)) return null;
+    let name = inner.trim().replace(/^[\s=\-─━*#~_+|<>·•.:：]+|[\s=\-─━*#~_+|<>·•.:：]+$/g, '');
+    const off = /\s*\[关\]$/.test(name);
+    name = name.replace(/\s*\[关\]$/, '').trim();
+    return name && name.length <= BZ_TITLE_MAX ? { name, off } : null;
+}
+
+function bzCatSel(sel) {
+    const s = sel.replace(/\s+/g, ' ').trim();
+    if (!s) return '其他';
+    const first = s.split(',')[0].trim();
+    if (BZ_GLOBAL.test(first)) return '全局';
+    for (const [re, name] of BZ_PARTS) if (re.test(s)) return name;
+    const m = first.match(/[.#]([A-Za-z_][\w-]*)/);
+    if (m) {
+        const root = m[1].split(/[-_]/)[0];
+        return root.length >= 2 ? root : m[1];
+    }
+    const tags = s.split(/[\s,>+~]+/).map(x => x.replace(/[:[].*$/, '')).filter(Boolean);
+    return tags.length && tags.every(t => BZ_TEXT_TAGS.test(t)) ? '正文' : '其他';
+}
+
+function bzCat(it) {
+    const h = it.head;
+    if (!h.startsWith('@')) return bzCatSel(h);
+    if (/^@import/i.test(h)) return /font/i.test(h) ? '字体' : '导入';
+    if (/^@font-face/i.test(h)) return '字体';
+    if (/^@(?:-\w+-)?keyframes/i.test(h)) return '动画';
+    if (it.open >= 0) {
+        const inner = bzItems(it.text.slice(it.open + 1, it.text.lastIndexOf('}'))).find(x => x.t === 'r');
+        if (inner) return bzCat(inner);
+    }
+    return '其他';
+}
+
+function bzSplit(src) {
+    const css = lf(src);
+    const blocks = [];
+    let cur = null;
+    let titled = false;
+    let pend = null;
+    const open = (name, title) => {
+        cur = { id: pzUid(), name, title: title?.text || null, titleName: name, offTitle: !!title?.off, off: false, s: -1, e: -1, text: '' };
+        blocks.push(cur);
+    };
+    const take = it => {
+        if (cur.s < 0) cur.s = pend ? pend.s : it.s;
+        cur.e = it.e;
+        pend = null;
+    };
+    for (const it of bzItems(css)) {
+        const tt = bzTitle(it);
+        if (tt) {
+            if (pend) {
+                if (!cur || cur.off) open('其他', null);
+                take(pend);
+            }
+            open(tt.name, { text: it.text, off: tt.off });
+            titled = true;
+            continue;
+        }
+        if (it.t === 'c' && it.text.startsWith('/*@off') && cur?.offTitle && cur.s < 0 && !cur.off) {
+            cur.off = true;
+            cur.text = it.text.slice(6, it.text.endsWith('@off*/') ? -6 : -2).replace(/^\n|\n$/g, '').replace(/\*\\\//g, '*/');
+            continue;
+        }
+        if (it.t === 'c') {
+            if (!pend) pend = it;
+            continue;
+        }
+        if (cur?.off) titled = false;
+        if (!titled) {
+            const key = bzCat(it);
+            if (!cur || cur.name !== key || cur.title || cur.off) open(key, null);
+        }
+        take(it);
+    }
+    if (pend) {
+        if (!cur || cur.off) open('其他', null);
+        take(pend);
+    }
+    blocks.forEach(b => {
+        if (!b.off) b.text = b.s < 0 ? '' : css.slice(b.s, b.e);
+        delete b.s;
+        delete b.e;
+    });
+    return blocks;
+}
+
+function bzHeader(b) {
+    if (b.title && b.titleName === b.name && b.off === b.offTitle) return b.title;
+    return `/* ${b.name}${b.off ? ' [关]' : ''} */`;
+}
+
+function bzJoin(blocks) {
+    if (!blocks.length) return '';
+    return blocks.map(b => {
+        const body = b.off ? `/*@off\n${b.text.replace(/\*\//g, '*\\/')}\n@off*/` : b.text;
+        return body ? `${bzHeader(b)}\n${body}` : bzHeader(b);
+    }).join('\n\n') + '\n';
+}
+
+const bzText = () => bzJoin(bz.blocks);
+const bzDirty = () => bzText() !== bz.base;
+const bzLiveCss = () => lf(ctx().powerUserSettings?.custom_css ?? $('#customCSS').val() ?? '');
+
+function bzGroups() {
+    const map = new Map();
+    bz.blocks.forEach(b => {
+        if (!map.has(b.name)) map.set(b.name, []);
+        map.get(b.name).push(b);
+    });
+    return [...map].map(([name, list]) => ({ name, list }));
+}
+
+function bzStyle(text) {
+    let el = document.getElementById('custom-style');
+    if (!el) {
+        el = document.createElement('style');
+        el.id = 'custom-style';
+        document.head.append(el);
+    }
+    el.innerHTML = text;
+}
+
+function bzPreviewSoon() {
+    cancelAnimationFrame(bz.raf);
+    bz.raf = requestAnimationFrame(() => {
+        bz.raf = 0;
+        bzStyle(bzText());
+    });
+}
+
+function bzLoad() {
+    bz.orig = bzLiveCss();
+    bz.blocks = bzSplit(bz.orig);
+    bz.base = bzText();
+    Object.assign(bz, { undo: [], redo: [], open: null, part: 0, typing: false, merging: false, themeAdd: false });
+}
+
+function bzReset() {
+    cancelAnimationFrame(bz.raf);
+    clearTimeout(bz.tt);
+    if (bz.live) bzStyle(bzLiveCss());
+    bz.live = false;
+    bz.half = false;
+    bz.open = null;
+    $('#rs_overlay').removeClass('rs_half');
+    $('#rs_cp').remove();
+}
+
+function bzPush() {
+    bz.undo.push(structuredClone(bz.blocks));
+    if (bz.undo.length > BZ_UNDO_MAX) bz.undo.shift();
+    bz.redo = [];
+}
+
+function bzChanged() {
+    bzPreviewSoon();
+    bzBar();
+}
+
+function bzStep(back) {
+    const from = back ? bz.undo : bz.redo;
+    if (!from.length) return;
+    (back ? bz.redo : bz.undo).push(structuredClone(bz.blocks));
+    bz.blocks = from.pop();
+    bz.typing = false;
+    if (bz.open && !bz.blocks.some(b => b.name === bz.open)) bz.open = null;
+    bzChanged();
+    bzRender();
+}
+
+function bzBar() {
+    const $p = $('#rs_panel .rs_bz');
+    $p.find('.rs_bz_undo').toggleClass('rs_off', !bz.undo.length);
+    $p.find('.rs_bz_redo').toggleClass('rs_off', !bz.redo.length);
+    const dirty = bzDirty();
+    $p.find('.rs_bz_save').text(dirty ? '写回' : '已保存').toggleClass('rs_on', dirty);
+    $p.find('.rs_bz_half').toggleClass('rs_on', bz.half);
+}
+
+function openBeauty() {
+    bzLoad();
+    bz.live = true;
+    bz.tab = settings().bzTab === 'root' ? 'root' : 'seg';
+    $('#rs_panel .rs_bz').html(`
+<div class="rs_bar rs_pz_head">
+  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS 片段</span><span data-t="root">:root 变量</span></div>
+  <div class="rs_bar_spacer"></div>
+  <div class="rs_icon rs_bz_half fa-solid fa-table-cells-row-unlock" title="半屏，边改边看聊天"></div>
+  <div class="rs_icon rs_bz_undo fa-solid fa-rotate-left" title="撤回"></div>
+  <div class="rs_icon rs_bz_redo fa-solid fa-rotate-right" title="重做"></div>
+  <span class="rs_pz_card_btn rs_bz_save">已保存</span>
+</div>
+<div class="rs_bz_main"></div>
+<div class="rs_bz_ed"></div>`);
+    bzRender();
+}
+
+function bzRender() {
+    $('#rs_panel .rs_bz_tabs span').each(function () { $(this).toggleClass('rs_on', this.dataset.t === bz.tab); });
+    $('#rs_panel .rs_bz').toggleClass('rs_bz_editing', !!bz.open);
+    bzBar();
+    if (bz.open) return bzEdRender();
+    $('#rs_panel .rs_bz_ed').empty();
+    rt.host = null;
+    if (bz.tab === 'root') return bzRootRender();
+    const $m = $('#rs_panel .rs_bz_main');
+    if (!$m.find('.rs_bz_q').length) {
+        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_q" placeholder="在所有 CSS 里搜"></div><div class="rs_pz_list rs_bz_list"></div><div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_new">新建一段</span></div>`);
+        $m.find('.rs_bz_q').val(bz.q);
+    }
+    bzListRender();
+}
+
+function bzSnip(text, q) {
+    const i = text.toLowerCase().indexOf(q);
+    if (i < 0) return '';
+    const a = Math.max(0, i - BZ_SNIP / 2);
+    return `${a ? '…' : ''}${escapeHtml(text.slice(a, i))}<mark>${escapeHtml(text.slice(i, i + q.length))}</mark>${escapeHtml(text.slice(i + q.length, i + q.length + BZ_SNIP))}`;
+}
+
+function bzListRender() {
+    const q = bz.q.trim().toLowerCase();
+    const rows = bzGroups().map(g => {
+        const text = g.list.map(b => b.text).join('\n');
+        const on = g.list.some(b => !b.off);
+        let pv = '';
+        let hits = 0;
+        if (q) {
+            const low = text.toLowerCase();
+            for (let i = low.indexOf(q); i >= 0; i = low.indexOf(q, i + q.length)) hits++;
+            if (!hits && !g.name.toLowerCase().includes(q)) return '';
+            pv = hits ? bzSnip(text.replace(/\s+/g, ' '), q) : '';
+        } else {
+            const sels = bzItems(text).filter(x => x.t === 'r').map(x => x.head.replace(/\s+/g, ' '));
+            pv = escapeHtml(sels.slice(0, 4).join('　') || '（空）');
+        }
+        const tags = `${g.list.length > 1 ? `<span class="rs_pz_cat_tag">${g.list.length} 处</span>` : ''}${hits ? `<span class="rs_pz_cat_tag">${hits} 处命中</span>` : ''}`;
+        return `<div class="rs_pz_row rs_bz_row${on ? '' : ' rs_pz_off'}" data-g="${escapeHtml(g.name)}"><div class="rs_pz_main"><div class="rs_pz_name"><span class="rs_pz_nm">${escapeHtml(g.name)}</span>${tags}</div><div class="rs_pz_pv">${pv}</div></div><span class="rs_icon rs_pz_toggle rs_bz_tog fa-solid ${on ? 'fa-toggle-on' : 'fa-toggle-off'}" title="开关这段"></span></div>`;
+    }).join('');
+    $('#rs_panel .rs_bz_list').html(rows || `<div class="rs_empty">${q ? '没找到' : '自定义 CSS 是空的，点下面「新建一段」开始写'}</div>`);
+}
+
+function bzToggle(name) {
+    const list = bz.blocks.filter(b => b.name === name);
+    if (!list.length) return;
+    bzPush();
+    const anyOn = list.some(b => !b.off);
+    list.forEach(b => { b.off = anyOn; });
+    bzChanged();
+    bzRender();
+}
+
+function bzOpenGroup(name) {
+    bz.open = name;
+    bz.part = 0;
+    bz.merging = false;
+    bzRender();
+    const q = bz.q.trim();
+    if (q) {
+        const k = bz.blocks.filter(b => b.name === name).findIndex(b => b.text.toLowerCase().includes(q.toLowerCase()));
+        if (k > 0) {
+            bz.part = k;
+            bzEdRender();
+        }
+        rtTool('find');
+        $(rt.host).find('.rs_rx_fq').val(q);
+        rtFindRender(true);
+    }
+}
+
+const bzCurList = () => bz.blocks.filter(b => b.name === bz.open);
+const bzCur = () => bzCurList()[bz.part] || null;
+
+function bzEdRender() {
+    const list = bzCurList();
+    if (!list.length) {
+        bz.open = null;
+        return bzRender();
+    }
+    if (bz.part >= list.length) bz.part = 0;
+    const b = list[bz.part];
+    const on = list.some(x => !x.off);
+    const others = bzGroups().map(g => g.name).filter(n => n !== bz.open);
+    $('#rs_panel .rs_bz_ed').html(`
+<div class="rs_bar rs_bz_edhead"><span class="rs_icon rs_bz_back fa-solid fa-chevron-left" title="返回"></span><input type="text" class="rs_bz_name" value="${escapeHtml(bz.open)}"><span class="rs_icon rs_pz_toggle rs_bz_edtog fa-solid ${on ? 'fa-toggle-on' : 'fa-toggle-off'}" title="开关这段"></span></div>
+${list.length > 1 ? `<div class="rs_rx_tabs rs_bz_parts">${list.map((_, k) => `<span data-k="${k}" class="${k === bz.part ? 'rs_on' : ''}">第 ${k + 1} 处</span>`).join('')}</div>` : ''}
+<div class="rs_rx_rep rs_bz_rep">
+  <div class="rs_rx_lb rs_rx_lbrow"><span>${list.length > 1 ? '分散在几处，按原来的位置生效' : 'CSS'}</span><span class="rs_bar_spacer"></span>
+    <span class="rs_icon rs_rx_tool fa-solid fa-rotate-left rs_off" data-t="undo" title="撤销"></span>
+    <span class="rs_chip rs_rx_tool" data-t="find"><i class="fa-solid fa-magnifying-glass"></i></span>
+    <span class="rs_chip rs_rx_tool" data-t="img">图片<span class="rs_rx_n"></span></span>
+    <span class="rs_chip rs_rx_tool" data-t="color">颜色<span class="rs_rx_n"></span></span>
+    <span class="rs_icon rs_rx_tool fa-solid fa-expand" data-t="full" title="放大"></span>
+  </div>
+  <div class="rs_rx_tbox"></div>
+  <div class="rs_rx_repwrap"><div class="rs_rx_hl rs_rx_code"></div><textarea class="rs_rx_code rs_rx_reptext rs_bz_ta" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="在这里写 CSS"></textarea></div>
+</div>
+<div class="rs_bz_acts">
+  <span class="rs_pz_card_btn" data-a="split">从光标处拆成两段</span>
+  ${others.length ? `<span class="rs_pz_card_btn${bz.merging ? ' rs_on' : ''}" data-a="merge">合并到别的段</span>` : ''}
+  <span class="rs_pz_card_btn rs_pz_card_del" data-a="del">删除这段</span>
+</div>
+${bz.merging ? `<div class="rs_pz_cats rs_on rs_bz_mergebox">${others.map(n => `<span class="rs_chip" data-g="${escapeHtml(n)}">${escapeHtml(n)}</span>`).join('')}</div>` : ''}`);
+    $('#rs_panel .rs_bz_ta').val(b.text);
+    Object.assign(rt, { host: $('#rs_panel .rs_bz_rep')[0], fullEl: $('#rs_panel .rs_bz_ed')[0], onChange: bzEdInput, tool: null, full: false, undo: [], fi: 0, imgs: [], cols: [] });
+    $('#rs_panel .rs_bz_ed').removeClass('rs_rx_full');
     rtRefresh();
-    rtTbox();
+}
+
+function bzEdInput() {
+    const b = bzCur();
+    const ta = $('#rs_panel .rs_bz_ta')[0];
+    if (!b || !ta || b.text === ta.value) return;
+    if (!bz.typing) bzPush();
+    bz.typing = true;
+    clearTimeout(bz.tt);
+    bz.tt = setTimeout(() => { bz.typing = false; }, TYPING_PAUSE);
+    b.text = ta.value;
+    bzChanged();
+}
+
+function bzUniqueName(base) {
+    const names = new Set(bz.blocks.map(b => b.name));
+    if (!names.has(base)) return base;
+    for (let k = 2; ; k++) if (!names.has(`${base} ${k}`)) return `${base} ${k}`;
+}
+
+function bzNewBlock(name, text, off = false) {
+    return { id: pzUid(), name, title: null, titleName: name, offTitle: false, off, text };
+}
+
+function bzRename(v) {
+    const name = String(v || '').trim().replace(/[{}*/\n]/g, '');
+    if (!name || name === bz.open) return $('#rs_panel .rs_bz_name').val(bz.open);
+    bzPush();
+    bzCurList().forEach(b => { b.name = name; });
+    bz.open = name;
+    bzChanged();
+    bzRender();
+}
+
+function bzSplitAt() {
+    const b = bzCur();
+    const ta = $('#rs_panel .rs_bz_ta')[0];
+    if (!b || !ta) return;
+    const pos = ta.selectionStart;
+    const items = bzItems(b.text);
+    const inside = items.find(x => x.s < pos && pos < x.e);
+    const cut = inside ? inside.e : items.find(x => x.s >= pos)?.s ?? -1;
+    const head = b.text.slice(0, Math.max(0, cut)).trimEnd();
+    const tail = cut < 0 ? '' : b.text.slice(cut).replace(/^\s+/, '');
+    if (!head || !tail) return toastr.info('把光标放到两条规则之间再拆');
+    bzPush();
+    const name = bzUniqueName(`${b.name} 2`);
+    b.text = head;
+    bz.blocks.splice(bz.blocks.indexOf(b) + 1, 0, bzNewBlock(name, tail, b.off));
+    toastr.success(`拆出了「${name}」`);
+    bzChanged();
+    bzEdRender();
+}
+
+function bzCoalesce() {
+    for (let i = bz.blocks.length - 1; i > 0; i--) {
+        const a = bz.blocks[i - 1];
+        const b = bz.blocks[i];
+        if (a.name !== b.name || a.off !== b.off) continue;
+        a.text = [a.text, b.text].filter(Boolean).join('\n\n');
+        bz.blocks.splice(i, 1);
+    }
+}
+
+function bzMergeInto(target) {
+    if (!target || target === bz.open) return;
+    bzPush();
+    bzCurList().forEach(b => { b.name = target; });
+    bzCoalesce();
+    bz.open = target;
+    bz.part = 0;
+    bz.merging = false;
+    bzChanged();
+    bzRender();
+}
+
+async function bzEdAct(a) {
+    if (a === 'split') return bzSplitAt();
+    if (a === 'merge') {
+        bz.merging = !bz.merging;
+        return bzEdRender();
+    }
+    if (a === 'del') {
+        if (!(await askConfirm(`删掉「${bz.open}」这段？写回之前都能撤回`))) return;
+        bzPush();
+        bz.blocks = bz.blocks.filter(b => b.name !== bz.open);
+        bz.open = null;
+        bzChanged();
+        bzRender();
+    }
+}
+
+async function bzNew() {
+    const v = await askInput('新段的名字', '');
+    const name = String(v ?? '').trim().replace(/[{}*/\n]/g, '');
+    if (!name) return;
+    bzPush();
+    bz.blocks.push(bzNewBlock(bzUniqueName(name), ''));
+    bzChanged();
+    bzOpenGroup(bz.blocks[bz.blocks.length - 1].name);
+}
+
+function bzWrite(text) {
+    const $ta = $('#customCSS');
+    if ($ta.length) {
+        $ta.val(text).trigger('input');
+        return;
+    }
+    const p = ctx().powerUserSettings;
+    if (p) p.custom_css = text;
+    ctx().saveSettingsDebounced();
+    bzStyle(text);
+}
+
+async function bzSave() {
+    const text = bzText();
+    if (text === bz.base) return toastr.info('没有改动');
+    const cur = bzLiveCss();
+    if (cur !== bz.orig && !(await askConfirm('酒馆的自定义 CSS 在别处改过了，还要用这里的覆盖吗？'))) return;
+    if (!(await binAdd({ type: 'css', label: '自定义 CSS', sub: `${cur.length} 字`, data: { css: cur } }))) return toastr.error('没能备份原来的 CSS，为了安全没有写回');
+    bzWrite(text);
+    bz.orig = bzLiveCss();
+    bz.base = text;
+    toastr.success('写回了，原来的放在回收站');
+    bzBar();
+}
+
+function bzToggleHalf() {
+    bz.half = !bz.half;
+    $('#rs_overlay').toggleClass('rs_half', bz.half);
+    $('#rs_panel').css('--rs-half', `${BZ_HALF_DVH}dvh`);
+    bzBar();
+}
+
+function bzDecls(b) {
+    const out = [];
+    bzItems(b.text).forEach(it => {
+        if (it.t !== 'r' || it.open < 0 || !it.head.split(',').some(x => x.trim() === ':root')) return;
+        const body0 = it.s + it.open + 1;
+        const body = b.text.slice(body0, it.e - 1);
+        let q = '';
+        let paren = 0;
+        let st = 0;
+        const flush = end => {
+            const raw = body.slice(st, end);
+            const m = raw.match(/^(\s*)(--[\w-]+)(\s*:\s*)([\s\S]*?)(\s*)$/);
+            if (m) {
+                const imp = m[4].match(/\s*!important$/i);
+                const val = imp ? m[4].slice(0, imp.index) : m[4];
+                const vs = body0 + st + m[1].length + m[2].length + m[3].length;
+                out.push({ name: m[2], value: val, imp: !!imp, b, vs, ve: vs + val.length });
+            }
+            st = end + 1;
+        };
+        for (let i = 0; i < body.length; i++) {
+            const ch = body[i];
+            if (q) {
+                if (ch === '\\') i++;
+                else if (ch === q) q = '';
+            } else if (ch === '"' || ch === "'") q = ch;
+            else if (ch === '/' && body[i + 1] === '*') {
+                const e = body.indexOf('*/', i + 2);
+                if (body.slice(st, i).trim() === '') st = e < 0 ? body.length : e + 2;
+                i = (e < 0 ? body.length : e + 2) - 1;
+            } else if (ch === '(') paren++;
+            else if (ch === ')') paren = Math.max(0, paren - 1);
+            else if (ch === ';' && !paren) flush(i);
+        }
+        if (body.slice(st).trim()) flush(body.length);
+    });
+    return out;
+}
+
+function bzVars() {
+    const all = bz.blocks.filter(b => !b.off).flatMap(bzDecls);
+    const map = new Map();
+    all.forEach(d => {
+        const x = map.get(d.name) || { name: d.name, n: 0 };
+        x.n++;
+        x.d = d;
+        map.set(d.name, x);
+    });
+    return [...map.values()];
+}
+
+function bzVarKind(name, v) {
+    const t = v.trim();
+    if (/^url\(/i.test(t)) return 'img';
+    if (/^-?\d*\.?\d+(?:px|em|rem|%|vh|vw|dvh|svh|pt|ch|vmin|vmax)?$/i.test(t)) return 'num';
+    if (!/^(?:inherit|initial|unset|revert|none|auto|currentcolor)$/i.test(t) && rtParse(t)) return 'color';
+    if (/font|family/i.test(name) || /^["'][^"']*["'](?:\s*,|$)/.test(t)) return 'font';
+    return 'text';
+}
+
+function bzNumRange(v) {
+    const m = v.trim().match(/^(-?\d*\.?\d+)([a-z%]*)$/i);
+    const n = Number(m[1]);
+    const u = m[2].toLowerCase();
+    if (u === 'px' || u === 'pt') return { n, u, min: Math.min(0, n), max: Math.max(100, Math.ceil(Math.abs(n) * 2)), step: 1 };
+    if (u === '%' || /^(?:vh|vw|dvh|svh|vmin|vmax)$/.test(u)) return { n, u, min: Math.min(0, n), max: Math.max(100, Math.ceil(n)), step: 1 };
+    if (u) return { n, u, min: Math.min(0, n), max: Math.max(4, Math.ceil(Math.abs(n) * 2)), step: 0.05 };
+    return Math.abs(n) <= 1 ? { n, u, min: Math.min(0, n), max: 1, step: 0.01 } : { n, u, min: Math.min(0, n), max: Math.max(10, Math.ceil(Math.abs(n) * 2)), step: 0.1 };
+}
+
+function bzRootRender() {
+    const q = bz.rq.trim().toLowerCase();
+    const vars = bzVars();
+    const $m = $('#rs_panel .rs_bz_main');
+    if (!$m.find('.rs_bz_rq').length) {
+        $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_rq" placeholder="搜变量名"></div><div class="rs_pz_list rs_bz_vars"></div>
+<div class="rs_bz_foot rs_bz_addvar"><input type="text" class="rs_bz_nn" placeholder="--新变量名"><input type="text" class="rs_bz_nv" placeholder="值"><span class="rs_pz_card_btn rs_bz_addv">加上</span></div>
+<div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_theme">${bz.themeAdd ? '收起主题颜色' : '覆盖酒馆主题颜色'}</span></div><div class="rs_bz_themebox"></div>`);
+        $m.find('.rs_bz_rq').val(bz.rq);
+    }
+    const rows = vars.filter(x => !q || x.name.toLowerCase().includes(q)).map(x => {
+        const v = x.d.value;
+        const k = bzVarKind(x.name, v);
+        let ctl = '';
+        if (k === 'color') ctl = `<span class="rs_rx_sw rs_bz_vsw" style="--c:${escapeHtml(v)}"></span>`;
+        else if (k === 'num') {
+            const r = bzNumRange(v);
+            ctl = `<input type="range" class="rs_bz_vr" min="${r.min}" max="${r.max}" step="${r.step}" value="${r.n}" data-u="${r.u}">`;
+        } else if (k === 'img') {
+            const u = v.trim().replace(/^url\(\s*["']?|["']?\s*\)$/gi, '');
+            ctl = `<img class="rs_rx_ithumb" src="${escapeHtml(u)}" loading="lazy" referrerpolicy="no-referrer" alt=""><span class="rs_icon fa-solid fa-paste rs_bz_vpaste" title="用剪贴板里的链接"></span>`;
+        }
+        return `<div class="rs_bz_var" data-n="${escapeHtml(x.name)}" data-k="${k}"><div class="rs_bz_vname"><code>${escapeHtml(x.name)}</code>${x.n > 1 ? `<span class="rs_pz_cat_tag" title="写了 ${x.n} 次，最后一次生效">×${x.n}</span>` : ''}${x.d.imp ? '<span class="rs_pz_cat_tag">!important</span>' : ''}<span class="rs_bz_vfrom">${escapeHtml(x.d.b.name)}</span></div><div class="rs_bz_vctl">${ctl}<input type="text" class="rs_bz_vin" value="${escapeHtml(v)}" spellcheck="false" autocapitalize="off"></div></div>`;
+    }).join('');
+    $m.find('.rs_bz_vars').html(rows || `<div class="rs_empty">${q ? '没找到' : '还没有 :root 变量。下面可以加一个，或者把酒馆主题颜色拿过来改'}</div>`);
+    $m.find('.rs_bz_vars .rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
+    $m.find('.rs_bz_theme').text(bz.themeAdd ? '收起主题颜色' : '覆盖酒馆主题颜色');
+    const have = new Set(vars.map(x => x.name));
+    const root = getComputedStyle(document.documentElement);
+    $m.find('.rs_bz_themebox').html(bz.themeAdd ? `<div class="rs_set_note">点一个加进 :root，带 !important 才能盖过主题设置</div><div class="rs_pz_cats rs_on">${CP_THEME_VARS.map(([v, t]) => `<span class="rs_chip${have.has(v) ? ' rs_off' : ''}" data-v="${v}" data-c="${escapeHtml(root.getPropertyValue(v).trim())}">${t}</span>`).join('')}</div>` : '');
+}
+
+function bzVarSet(name, value, live) {
+    const x = bzVars().find(y => y.name === name);
+    if (!x) return false;
+    const v = String(value);
+    if (x.d.value === v) return true;
+    if (!live || !bz.varLive) bzPush();
+    bz.varLive = !!live;
+    const b = x.d.b;
+    b.text = b.text.slice(0, x.d.vs) + v + b.text.slice(x.d.ve);
+    bzChanged();
+    return true;
+}
+
+function bzVarRow(row) {
+    const x = bzVars().find(y => y.name === row.dataset.n);
+    if (!x) return;
+    const v = x.d.value;
+    $(row).find('.rs_bz_vin').not(':focus').val(v);
+    $(row).find('.rs_bz_vsw').css('--c', v);
+}
+
+function bzVarAdd(name, value, imp) {
+    name = String(name || '').trim();
+    value = String(value ?? '').trim();
+    if (!/^--[\w-]+$/.test(name)) return toastr.warning('变量名要以 -- 开头，只能有字母数字和 - _');
+    if (!value) return toastr.warning('值不能空着');
+    if (bzVars().some(x => x.name === name)) return toastr.info('已经有这个变量了');
+    bzPush();
+    const decl = `  ${name}: ${value}${imp ? ' !important' : ''};`;
+    const roots = bz.blocks.filter(b => !b.off).flatMap(b => bzItems(b.text).filter(it => it.t === 'r' && it.open >= 0 && it.head.split(',').some(s => s.trim() === ':root')).map(it => ({ b, it })));
+    const last = roots[roots.length - 1];
+    if (last) {
+        const close = last.it.e - 1;
+        last.b.text = `${last.b.text.slice(0, close).replace(/\s*$/, '')}\n${decl}\n${last.b.text.slice(close)}`;
+    } else {
+        bz.blocks.push(bzNewBlock(bzUniqueName('全局变量'), `:root {\n${decl}\n}`));
+    }
+    bzChanged();
+    bzRootRender();
+    return true;
 }
 
 function rxCloseEd() {
     rx.ed = null;
-    rt.tool = null;
-    rt.full = false;
+    Object.assign(rt, { tool: null, full: false, host: null, fullEl: null, onChange: null });
     $('#rs_panel .rs_rx_ed').removeClass('rs_rx_full');
     $('#rs_panel .rs_rx').removeClass('rs_rx_editing');
     $('#rs_panel .rs_rx_ed').empty();
@@ -4767,6 +5714,12 @@ ${types.length > 1 ? `<div class="rs_pz_cats rs_on">${['', ...types].map(t => `<
 async function binRestore(x) {
     const d = x.data;
     const c = ctx();
+    if (x.type === 'css') {
+        const cur = bzLiveCss();
+        if (cur && !(await binAdd({ type: 'css', label: '自定义 CSS', sub: `${cur.length} 字`, data: { css: cur } }))) return false;
+        bzWrite(d.css);
+        return true;
+    }
     if (x.type === 'fav') {
         const list = await favAll();
         if (!list.some(y => y.id === d.id)) await idbPut(FAV_KEY, [d, ...list]);
@@ -5947,6 +6900,7 @@ function shelfHoldMove(e) {
         return { kind: 'preset', subtitle: '预设 · 世界书', initial: '' };
     },
     regex: async () => ({ kind: 'regex', subtitle: '正则脚本', initial: '' }),
+    css: async () => ({ kind: 'css', subtitle: '自定义 CSS', initial: '' }),
     set: async () => ({ kind: 'set', subtitle: '插件设置', initial: '' }),
     fav: async () => ({ kind: 'fav', subtitle: '收藏的楼层', initial: '' }),
     bin: async () => ({ kind: 'bin', subtitle: '删掉的东西先放这里', initial: '' }),
@@ -6147,7 +7101,7 @@ function bindPanelEvents() {
             rtRefresh();
             if (rt.tool === 'img' || rt.tool === 'color') rtTbox();
         })
-        .on('scroll', '#rs_panel .rs_rx_reptext', function () { $('#rs_panel .rs_rx_hl').scrollTop(this.scrollTop); })
+        .on('scroll', '#rs_panel .rs_rx_reptext', function () { $(this).siblings('.rs_rx_hl').scrollTop(this.scrollTop); })
         .on('click', '#rs_panel .rs_rx_tool', function () { rtTool(this.dataset.t); })
         .on('input', '#rs_panel .rs_rx_fq', () => {
             rt.fi = 0;
@@ -6164,8 +7118,97 @@ function bindPanelEvents() {
             if (e.key === 'Enter') this.blur();
         })
         .on('click', '#rs_panel .rs_rx_ipaste', function () { rtImgPaste(this.closest('.rs_rx_irow')); })
-        .on('input', '#rs_panel .rs_rx_cin, #rs_panel .rs_rx_ca', function () { rtColorLive(this.closest('.rs_rx_crow')); })
-        .on('change', '#rs_panel .rs_rx_cin, #rs_panel .rs_rx_ca', function () { rtColorDone(this.closest('.rs_rx_crow')); })
+        .on('click', '#rs_panel .rs_rx_crow .rs_rx_sw', function () { rtColorPick(this.closest('.rs_rx_crow')); })
+        .on('click', '#rs_panel .rs_bz_tabs span', function () {
+            bz.tab = this.dataset.t;
+            bz.open = null;
+            settings().bzTab = bz.tab;
+            ctx().saveSettingsDebounced();
+            $('#rs_panel .rs_bz_main').empty();
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_bz_undo', () => bzStep(true))
+        .on('click', '#rs_panel .rs_bz_redo', () => bzStep(false))
+        .on('click', '#rs_panel .rs_bz_save', bzSave)
+        .on('click', '#rs_panel .rs_bz_half', bzToggleHalf)
+        .on('input', '#rs_panel .rs_bz_q', function () {
+            bz.q = this.value;
+            clearTimeout(bz.qt);
+            bz.qt = setTimeout(bzListRender, 150);
+        })
+        .on('click', '#rs_panel .rs_bz_row', function (e) {
+            if ($(e.target).closest('.rs_bz_tog').length) return bzToggle(this.dataset.g);
+            bzOpenGroup(this.dataset.g);
+        })
+        .on('click', '#rs_panel .rs_bz_new', bzNew)
+        .on('click', '#rs_panel .rs_bz_back', () => {
+            bz.open = null;
+            bzRender();
+        })
+        .on('click', '#rs_panel .rs_bz_edtog', () => bzToggle(bz.open))
+        .on('change', '#rs_panel .rs_bz_name', function () { bzRename(this.value); })
+        .on('keydown', '#rs_panel .rs_bz_name', function (e) {
+            if (e.key === 'Enter') this.blur();
+        })
+        .on('click', '#rs_panel .rs_bz_parts span', function () {
+            bz.part = Number(this.dataset.k);
+            bzEdRender();
+        })
+        .on('input', '#rs_panel .rs_bz_ta', bzEdInput)
+        .on('click', '#rs_panel .rs_bz_acts .rs_pz_card_btn', function () { bzEdAct(this.dataset.a); })
+        .on('click', '#rs_panel .rs_bz_mergebox .rs_chip', function () { bzMergeInto(this.dataset.g); })
+        .on('input', '#rs_panel .rs_bz_rq', function () {
+            bz.rq = this.value;
+            clearTimeout(bz.qt);
+            bz.qt = setTimeout(bzRootRender, 150);
+        })
+        .on('click', '#rs_panel .rs_bz_vsw', function () {
+            const row = this.closest('.rs_bz_var');
+            const x = bzVars().find(y => y.name === row.dataset.n);
+            if (!x) return;
+            const hex = x.d.value.trim().startsWith('#');
+            bz.varLive = false;
+            cpOpen(x.d.value, {
+                onInput: c => {
+                    bzVarSet(row.dataset.n, rtFormat(hex ? 'hex' : 'rgb', c), true);
+                    bzVarRow(row);
+                },
+                onDone: () => { bz.varLive = false; },
+            });
+        })
+        .on('input', '#rs_panel .rs_bz_vr', function () {
+            const row = this.closest('.rs_bz_var');
+            bzVarSet(row.dataset.n, `${+Number(this.value).toFixed(3)}${this.dataset.u}`, true);
+            bzVarRow(row);
+        })
+        .on('change', '#rs_panel .rs_bz_vr', () => { bz.varLive = false; })
+        .on('change', '#rs_panel .rs_bz_vin', function () {
+            const row = this.closest('.rs_bz_var');
+            bz.varLive = false;
+            if (bzVarSet(row.dataset.n, this.value.trim())) bzRootRender();
+        })
+        .on('keydown', '#rs_panel .rs_bz_vin, #rs_panel .rs_bz_nv', function (e) {
+            if (e.key === 'Enter') this.blur();
+        })
+        .on('click', '#rs_panel .rs_bz_vpaste', async function () {
+            let t = '';
+            try { t = await navigator.clipboard.readText(); } catch { }
+            t = String(t || '').trim();
+            if (!/^https?:\/\//i.test(t)) return toastr.warning('剪贴板里不是链接');
+            bz.varLive = false;
+            if (bzVarSet(this.closest('.rs_bz_var').dataset.n, `url("${t}")`)) bzRootRender();
+        })
+        .on('click', '#rs_panel .rs_bz_addv', () => {
+            if (bzVarAdd($('#rs_panel .rs_bz_nn').val(), $('#rs_panel .rs_bz_nv').val())) $('#rs_panel .rs_bz_nn, #rs_panel .rs_bz_nv').val('');
+        })
+        .on('click', '#rs_panel .rs_bz_theme', () => {
+            bz.themeAdd = !bz.themeAdd;
+            bzRootRender();
+        })
+        .on('click', '#rs_panel .rs_bz_themebox .rs_chip', function () {
+            if (this.classList.contains('rs_off')) return toastr.info('已经加过了');
+            bzVarAdd(this.dataset.v, this.dataset.c || '#888888', true);
+        })
         .on('click', '#rs_panel .rs_rx_ed_act', function () { rxEdAct(this.dataset.a); })
         .on('change', '#rs_panel .rs_pz_tgt', function () { pzChangeTarget(this.value); })
         .on('change', '#rs_panel .rs_pz_tkind', function () { pzChangeTarget('', this.value); })
@@ -6888,7 +7931,7 @@ async function ccDelete() {
 
 function renderSettings() {
     const s = settings();
-    const color = (k, label) => `<div class="rs_set_color"><span>${label}</span><input type="color" data-look="${k}" value="${/^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : '#888888'}"><span class="rs_set_reset${s[k] ? '' : ' rs_on'}" data-reset="${k}">跟随主题</span></div>`;
+    const color = (k, label) => `<div class="rs_set_color"><span>${label}</span><span class="rs_rx_sw rs_set_sw" data-look="${k}" style="--c:${/^#[0-9a-f]{6}$/i.test(s[k]) ? s[k] : 'transparent'}"></span><span class="rs_set_reset${s[k] ? '' : ' rs_on'}" data-reset="${k}">跟随主题</span></div>`;
     const range = (k, label, unit) => `<label class="rs_set_range"><span>${label}</span><input type="range" data-look="${k}" min="${LOOK_RANGE[k][0]}" max="${LOOK_RANGE[k][1]}" value="${lookNum(k)}"><b>${lookNum(k)}${unit}</b></label>`;
     $('#rs_panel .rs_set').html(`
 <div class="rs_set_body">
@@ -6946,15 +7989,29 @@ function renderSettings() {
 
     $('#rs_panel .rs_set input[data-look]').on('input', function () {
         const k = this.dataset.look;
-        settings()[k] = this.type === 'color' ? this.value : Number(this.value);
-        if (this.type === 'range') $(this).next('b').text(this.value + (k === 'panelWidth' || k === 'editFont' ? 'px' : '%'));
-        else $(this).nextAll('.rs_set_reset').removeClass('rs_on');
+        settings()[k] = Number(this.value);
+        $(this).next('b').text(this.value + (k === 'panelWidth' || k === 'editFont' ? 'px' : '%'));
         applyLook();
         ctx().saveSettingsDebounced();
     });
+    $('#rs_panel .rs_set .rs_set_sw').on('click', function () {
+        const k = this.dataset.look;
+        const sw = this;
+        const now = settings()[k] || getComputedStyle(document.getElementById('rs_panel')).getPropertyValue({ accent: '--rs-accent', panelBg: '--rs-bg', panelText: '--rs-text' }[k]).trim();
+        cpOpen(now || '#888888', {
+            alpha: false,
+            onInput: c => {
+                settings()[k] = rtFormat('hex', { ...c, a: 1 });
+                sw.style.setProperty('--c', settings()[k]);
+                $(sw).nextAll('.rs_set_reset').removeClass('rs_on');
+                applyLook();
+            },
+            onDone: () => ctx().saveSettingsDebounced(),
+        });
+    });
     $('#rs_panel .rs_set .rs_set_reset').on('click', function () {
         settings()[this.dataset.reset] = '';
-        $(this).addClass('rs_on');
+        $(this).addClass('rs_on').prevAll('.rs_set_sw').css('--c', 'transparent');
         applyLook();
         ctx().saveSettingsDebounced();
     });
@@ -7089,6 +8146,7 @@ jQuery(() => {
     bindPanelEvents();
     renderBall();
     document.addEventListener('selectionchange', guardSelection);
+    cpBind();
     const chatBox = chatEl();
     if (chatBox) {
         chatBox.addEventListener('scroll', onChatScroll, { passive: true });
