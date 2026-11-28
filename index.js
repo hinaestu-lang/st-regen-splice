@@ -1181,8 +1181,7 @@ async function worldTarget(book, uid) {
     }
 
     const data = await c.loadWorldInfo(book);
-    const entries = Object.values(data?.entries || {})
-        .sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid));
+    const entries = pzWorldList(data || {});
 
     const bookOpts = names.map(n => `<option ${n === book ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
     if (!entries.length) {
@@ -1196,9 +1195,8 @@ async function worldTarget(book, uid) {
     }
 
     const entry = entries.find(e => String(e.uid) === String(uid)) || entries[0];
-    const entryLabel = e => e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid}`;
     const entryOpts = entries.map(e =>
-        `<option value="${e.uid}" ${e === entry ? 'selected' : ''}>${escapeHtml(entryLabel(e))}${e.disable ? '（已禁用）' : ''}</option>`).join('');
+        `<option value="${e.uid}" ${e === entry ? 'selected' : ''}>${escapeHtml(wiName(e))}${e.disable ? '（已禁用）' : ''}</option>`).join('');
     const initial = lf(entry.content);
     const key = `wi:${book}:${entry.uid}`;
 
@@ -1252,11 +1250,8 @@ async function wiOrphanBooks(gone) {
     const wi = await pzWorldApi();
     const lore = wi?.world_info?.charLore || [];
     const goneNames = new Set(gone.map(x => x.avatar.replace(/\.[^.]+$/, '')));
-    const books = new Set();
-    for (const x of gone) {
-        if (x.world) books.add(x.world);
-        for (const b of lore.find(l => l.name === x.avatar.replace(/\.[^.]+$/, ''))?.extraBooks || []) books.add(b);
-    }
+    const books = new Set(gone.map(x => x.world).filter(Boolean));
+    for (const l of lore) if (goneNames.has(l.name)) (l.extraBooks || []).forEach(b => books.add(b));
     if ((c.characters || []).some(x => x?.avatar && !('world' in (x.data?.extensions || {})))) return [];
     const { pu } = await personaInfo();
     const used = new Set([
@@ -1317,9 +1312,8 @@ async function wfindRender() {
     for (const b of books) {
         const data = await ctx().loadWorldInfo(b);
         if (seq !== wfind.seq) return;
-        const entries = Object.values(data?.entries || {}).sort((a, c) => (a.displayIndex ?? a.uid) - (c.displayIndex ?? c.uid));
-        for (const e of entries) {
-            const name = e.comment || (Array.isArray(e.key) && e.key.join('、')) || `条目 ${e.uid}`;
+        for (const e of pzWorldList(data || {})) {
+            const name = wiName(e);
             const keys = [...(e.key || []), ...(e.keysecondary || [])].join(' ');
             if (q && ![name, keys, e.content].some(x => String(x || '').toLowerCase().includes(q))) continue;
             const hitContent = q && !name.toLowerCase().includes(q) && !keys.toLowerCase().includes(q);
@@ -2841,8 +2835,7 @@ async function pzDocxText(buf) {
 const wiName = (w, i) => String(w.comment || (Array.isArray(w.key) && w.key.join('、')) || `条目 ${w.uid ?? i}`);
 
 function pzWorldEntries(entries, prefix) {
-    return Object.values(entries || {})
-        .sort((a, b) => (a.displayIndex ?? a.uid) - (b.displayIndex ?? b.uid))
+    return pzWorldList({ entries })
         .map((e, i) => ({
             key: `${prefix}${e.uid ?? i}`,
             id: null,
@@ -4458,10 +4451,13 @@ let rtCanvas = null;
 
 function rtParse(str) {
     rtCanvas = rtCanvas || document.createElement('canvas').getContext('2d');
-    rtCanvas.fillStyle = '#010203';
-    rtCanvas.fillStyle = str;
-    const n = String(rtCanvas.fillStyle);
-    if (n === '#010203' && !/^#010203$/i.test(str)) return null;
+    const probe = seed => {
+        rtCanvas.fillStyle = seed;
+        rtCanvas.fillStyle = str;
+        return String(rtCanvas.fillStyle);
+    };
+    const n = probe('#000000');
+    if (n !== probe('#ffffff')) return null;
     if (n.startsWith('#')) return { r: parseInt(n.slice(1, 3), 16), g: parseInt(n.slice(3, 5), 16), b: parseInt(n.slice(5, 7), 16), a: 1 };
     const v = n.match(/[\d.]+/g)?.map(Number) || [];
     return { r: v[0] || 0, g: v[1] || 0, b: v[2] || 0, a: v[3] ?? 1 };
