@@ -655,7 +655,7 @@ function closeVersionMenu() {
     $('#rs_vmenu').remove();
 }
 
-const TAP_SKIP = 'a, button, input, textarea, select, summary, details, img, video, audio, iframe, label, .rs_vchip, .rs_bchip, .mes_buttons, .mes_edit_buttons, .swipe_left, .swipe_right';
+const TAP_SKIP = 'a, button, input, textarea, select, summary, img, video, audio, iframe, label, .rs_vchip, .rs_bchip, .mes_buttons, .mes_edit_buttons, .swipe_left, .swipe_right';
 let tap = null;
 
 function textPosAt(x, y) {
@@ -677,7 +677,7 @@ function countOf(hay, needle) {
     return n;
 }
 
-const FLAT_BLOCK = /^(P|DIV|LI|BLOCKQUOTE|H[1-6]|PRE|TR|UL|OL|SECTION|DETAILS)$/;
+const FLAT_BLOCK = /^(P|DIV|LI|BLOCKQUOTE|H[1-6]|PRE|TR|UL|OL|SECTION|DETAILS|SUMMARY)$/;
 
 function flatText(root) {
     const parts = [];
@@ -710,9 +710,29 @@ function flatPos(parts, off, end) {
     return hit && { node: hit.node, offset: Math.max(0, Math.min(off - hit.at, hit.node.length)) };
 }
 
+const NEAR_TEXT_PX = 40;
+
+function nearestText(textEl, x, y) {
+    const w = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT);
+    const r = document.createRange();
+    let best = null;
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+        if (!n.data.trim()) continue;
+        r.selectNodeContents(n);
+        for (const b of r.getClientRects()) {
+            const dx = Math.max(b.left - x, 0, x - b.right);
+            const dy = Math.max(b.top - y, 0, y - b.bottom);
+            const d = Math.hypot(dx, dy);
+            if (!best || d < best.d) best = { d, node: n, offset: x < b.left || y < b.top ? 0 : n.length };
+        }
+    }
+    return best && best.d <= NEAR_TEXT_PX ? best : null;
+}
+
 function paragraphAtTap(e, textEl) {
-    const pos = textPosAt(e.clientX, e.clientY);
-    if (!pos || pos.node.nodeType !== Node.TEXT_NODE || !textEl.contains(pos.node)) return null;
+    let pos = textPosAt(e.clientX, e.clientY);
+    if (!pos || pos.node.nodeType !== Node.TEXT_NODE || !textEl.contains(pos.node) || !pos.node.data.trim()) pos = nearestText(textEl, e.clientX, e.clientY);
+    if (!pos) return null;
     const { text, parts } = flatText(textEl);
     const part = parts.find(p => p.node === pos.node);
     if (!part) return null;
@@ -816,12 +836,25 @@ function fitInline() {
     ta.style.height = ta.scrollHeight + 2 + 'px';
 }
 
-const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_MS = 450;
 const DOUBLE_TAP_DIST = 30;
+const TAP_HOLD_MS = 500;
+const TAP_MOVE_PX = 10;
 let lastTap = null;
+let tapDown = null;
 
-function onMessageClick(e) {
+function onMessageDown(e) {
+    tapDown = e.isPrimary === false ? null : { t: Date.now(), x: e.clientX, y: e.clientY, el: e.currentTarget };
+}
+
+function onMessageUp(e) {
+    const d = tapDown;
+    tapDown = null;
     if (!settings().tapEdit) return;
+    if (!d || d.el !== e.currentTarget || Date.now() - d.t > TAP_HOLD_MS || Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_MOVE_PX) {
+        lastTap = null;
+        return;
+    }
     if ($(e.target).closest('.rs_inline_box').length || $(e.target).closest(TAP_SKIP).length) return;
     const now = Date.now();
     const prev = lastTap;
@@ -846,9 +879,13 @@ function keepInView() {
 
 function onMessageTap(e) {
     const textEl = e.currentTarget;
-    if (textEl.querySelector('textarea:not(.rs_inline_ta)')) return;
+    if (textEl.querySelector('textarea:not(.rs_inline_ta)')) return toastr.info('这楼正在用酒馆的编辑框，先关掉它');
     if (tap) {
-        if (tap.ta.value !== tap.original) return;
+        if (tap.ta.value !== tap.original) {
+            toastr.info('上一个编辑框改过还没确认，先确认或取消');
+            tap.box?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return;
+        }
         endInlineEdit(true);
     }
     const mes = textEl.closest('.mes');
@@ -856,7 +893,7 @@ function onMessageTap(e) {
     const m = ctx().chat[id];
     if (!Number.isInteger(id) || !m) return;
     const hit = paragraphAtTap(e, textEl);
-    if (!hit) return;
+    if (!hit) return toastr.info('没点到文字，双击段落里的字试试');
     const span = hit.range && locateInRaw(m.mes, hit.sentence, hit.nth);
     if (!span) {
         toastr.info('这段被正则改过显示，对不上原文，请用整楼编辑');
@@ -5944,7 +5981,9 @@ function bindPanelEvents() {
             openFromBall();
         })
         .on('click', '#rs_panel .rs_ball_toggle', () => setBallVisible(!settings().ball))
-        .on('click', '#chat .mes_text', onMessageClick)
+        .on('pointerdown', '#chat .mes_text', onMessageDown)
+        .on('pointerup', '#chat .mes_text', onMessageUp)
+        .on('pointercancel', '#chat .mes_text', () => { tapDown = null; })
         .on('pointerdown', '.rs_inline_btn', e => e.preventDefault())
         .on('click', '.rs_inline_btn', function (e) {
             e.stopPropagation();
