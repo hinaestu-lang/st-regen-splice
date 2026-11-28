@@ -3090,3 +3090,137 @@ body > #rs_cp {
     width: 30px;
     height: 30px;
 }
+
+#rs_panel .rs_bz_tabs span {
+    padding: 4px 8px;
+    white-space: nowrap;
+}
+
+#rs_panel .rs_bz .rs_pz_head {
+    gap: 4px;
+}
+
+#rs_panel .rs_bz_save {
+    flex: none;
+    white-space: nowrap;
+}
+
+#rs_panel .rs_ty_body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 12px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#rs_panel .rs_ty_sample {
+    flex: none;
+    padding: 10px 14px;
+    border-radius: 12px;
+    border: 1px dashed var(--rs-line);
+    background: var(--SmartThemeBotMesBlurTintColor, transparent);
+    color: var(--SmartThemeBodyColor);
+}
+
+#rs_panel .rs_ty_sample h4 {
+    margin: 0.4em 0 0;
+}
+
+#rs_panel .rs_ty_role {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--rs-soft);
+}
+
+#rs_panel .rs_ty_rh {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+#rs_panel .rs_ty_hint {
+    font-size: 12px;
+    opacity: 0.55;
+}
+
+#rs_panel .rs_ty_rc {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+#rs_panel .rs_ty_rc .rs_chip {
+    padding: 3px 10px;
+    font-size: 12px;
+}
+
+#rs_panel .rs_ty_clr {
+    padding: 4px;
+    font-size: 13px;
+    opacity: 0.6;
+}
+
+#rs_panel .rs_ty_sl,
+#rs_panel .rs_ty_fsel {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font-size: 13px;
+}
+
+#rs_panel .rs_ty_sl > span:first-child,
+#rs_panel .rs_ty_fsel > span {
+    flex: 0 0 4.5em;
+    opacity: 0.75;
+}
+
+#rs_panel .rs_ty_sl input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    accent-color: var(--rs-accent);
+}
+
+#rs_panel .rs_ty_sl b {
+    flex: 0 0 4em;
+    text-align: right;
+    font-weight: normal;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+}
+
+#rs_panel .rs_ty_fsel select {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+}
+
+#rs_panel .rs_tf_row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+#rs_panel .rs_tf_name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 16px;
+}
+
+#rs_panel .rs_tf_add {
+    padding: 0;
+    border: none;
+}

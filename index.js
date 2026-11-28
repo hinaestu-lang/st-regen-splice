@@ -445,6 +445,7 @@ function updateChipsOf(el) {
     const id = Number(el.getAttribute('mesid'));
     updateVersionChip(id, el);
     updateBranchChip(id, el);
+    tyWrap(el.querySelector('.mes_text'));
 }
 
 function updateAllVersionChips() {
@@ -5140,6 +5141,7 @@ function bzStyle(text) {
         document.head.append(el);
     }
     el.innerHTML = text;
+    tyRewrapAll();
 }
 
 function bzPreviewSoon() {
@@ -5202,10 +5204,10 @@ function bzBar() {
 function openBeauty() {
     bzLoad();
     bz.live = true;
-    bz.tab = settings().bzTab === 'root' ? 'root' : 'seg';
+    bz.tab = ['root', 'ty', 'tf'].includes(settings().bzTab) ? settings().bzTab : 'seg';
     $('#rs_panel .rs_bz').html(`
 <div class="rs_bar rs_pz_head">
-  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS 片段</span><span data-t="root">:root 变量</span></div>
+  <div class="rs_rx_tabs rs_bz_tabs"><span data-t="seg">CSS</span><span data-t="root">:root</span><span data-t="ty">排版</span><span data-t="tf">字体</span></div>
   <div class="rs_bar_spacer"></div>
   <div class="rs_icon rs_bz_half fa-solid fa-table-cells-row-unlock" title="半屏，边改边看聊天"></div>
   <div class="rs_icon rs_bz_undo fa-solid fa-rotate-left" title="撤回"></div>
@@ -5225,6 +5227,8 @@ function bzRender() {
     $('#rs_panel .rs_bz_ed').empty();
     rt.host = null;
     if (bz.tab === 'root') return bzRootRender();
+    if (bz.tab === 'ty') return tyRender();
+    if (bz.tab === 'tf') return tfRender();
     const $m = $('#rs_panel .rs_bz_main');
     if (!$m.find('.rs_bz_q').length) {
         $m.html(`<div class="rs_pz_filter"><input type="text" class="rs_bz_q" placeholder="在所有 CSS 里搜"></div><div class="rs_pz_list rs_bz_list"></div><div class="rs_bz_foot"><span class="rs_pz_card_btn rs_bz_new">新建一段</span></div>`);
@@ -5553,9 +5557,10 @@ function bzRootRender() {
             const u = v.trim().replace(/^url\(\s*["']?|["']?\s*\)$/gi, '');
             ctl = `<img class="rs_rx_ithumb" src="${escapeHtml(u)}" loading="lazy" referrerpolicy="no-referrer" alt=""><span class="rs_icon fa-solid fa-paste rs_bz_vpaste" title="用剪贴板里的链接"></span>`;
         }
-        return `<div class="rs_bz_var" data-n="${escapeHtml(x.name)}" data-k="${k}"><div class="rs_bz_vname"><code>${escapeHtml(x.name)}</code>${x.n > 1 ? `<span class="rs_pz_cat_tag" title="写了 ${x.n} 次，最后一次生效">×${x.n}</span>` : ''}${x.d.imp ? '<span class="rs_pz_cat_tag">!important</span>' : ''}<span class="rs_bz_vfrom">${escapeHtml(x.d.b.name)}</span></div><div class="rs_bz_vctl">${ctl}<input type="text" class="rs_bz_vin" value="${escapeHtml(v)}" spellcheck="false" autocapitalize="off"></div></div>`;
+        if (k === 'font') ctl = '';
+        return `<div class="rs_bz_var" data-n="${escapeHtml(x.name)}" data-k="${k}"><div class="rs_bz_vname"><code>${escapeHtml(x.name)}</code>${x.n > 1 ? `<span class="rs_pz_cat_tag" title="写了 ${x.n} 次，最后一次生效">×${x.n}</span>` : ''}${x.d.imp ? '<span class="rs_pz_cat_tag">!important</span>' : ''}<span class="rs_bz_vfrom">${escapeHtml(x.d.b.name)}</span></div><div class="rs_bz_vctl">${ctl}<input type="text" class="rs_bz_vin" value="${escapeHtml(v)}" spellcheck="false" autocapitalize="off"${k === 'font' ? ' list="rs_bz_fontlist"' : ''}></div></div>`;
     }).join('');
-    $m.find('.rs_bz_vars').html(rows || `<div class="rs_empty">${q ? '没找到' : '还没有 :root 变量。下面可以加一个，或者把酒馆主题颜色拿过来改'}</div>`);
+    $m.find('.rs_bz_vars').html((rows || `<div class="rs_empty">${q ? '没找到' : '还没有 :root 变量。下面可以加一个，或者把酒馆主题颜色拿过来改'}</div>`) + `<datalist id="rs_bz_fontlist">${tfFonts().map(f => `<option value="&quot;${escapeHtml(f.name)}&quot;">`).join('')}</datalist>`);
     $m.find('.rs_bz_vars .rs_rx_ithumb').on('error', function () { this.classList.add('rs_bad'); });
     $m.find('.rs_bz_theme').text(bz.themeAdd ? '收起主题颜色' : '覆盖酒馆主题颜色');
     const have = new Set(vars.map(x => x.name));
@@ -5603,6 +5608,318 @@ function bzVarAdd(name, value, imp) {
     bzChanged();
     bzRootRender();
     return true;
+}
+
+const TY_BLOCK = '插件·排版';
+const TF_BLOCK = '插件·字体';
+const TFF_BLOCK = '插件·字体文件';
+const TF_OWN = new Set([TF_BLOCK, TFF_BLOCK]);
+const TY_ROLES = [['say', '对话', '“引号”里的话'], ['think', '心理', '括号里的心理描写'], ['act', '动作', '*星号*包着的斜体']];
+const TY_THINK_MARKS = ['（）', '()', '【】', '[]', '〈〉', '《》'];
+const TY_SAY_MARKS = ['「」', '『』'];
+const TY_SLIDERS = [['size', '字号', 12, 28, 1, 'px'], ['lh', '行高', 1, 3, 0.05, ''], ['gap', '段间距', 0, 3, 0.1, 'em'], ['indent', '首行缩进', 0, 4, 0.5, 'em'], ['ls', '字间距', 0, 0.3, 0.01, 'em']];
+const TY_SKIP = 'q, code, pre, script, style, textarea, .rsty-think, .rsty-say, .rs_inline_box';
+const TY_FONT_EXT = /\.(?:ttf|otf|woff2?)(?:[?#]|$)/i;
+const TY_SAMPLE = '<p>他推开门，屋里没开灯。</p><p>“你怎么才来？”她问。（他身上有雨的味道。）</p><p><em>她伸手把灯打开了。</em></p><h4>小标题</h4>';
+const tyOf = (st, k) => st[k] ?? '';
+
+function tyState() {
+    const st = {};
+    bz.blocks.filter(b => b.name === TY_BLOCK).flatMap(bzDecls).forEach(d => {
+        if (d.name.startsWith('--rsty-')) st[d.name.slice(7)] = d.value.trim();
+    });
+    return st;
+}
+
+function tyCss(st) {
+    const keys = Object.keys(st).filter(k => st[k] !== '');
+    if (!keys.length) return '';
+    const v = k => `var(--rsty-${k})`;
+    const rule = (sel, map) => {
+        const body = Object.entries(map).filter(([k]) => st[k]).map(([k, prop]) => `  ${prop}: ${v(k)};`);
+        return body.length ? `${sel} {\n${body.join('\n')}\n}` : '';
+    };
+    const roleSel = {
+        say: '#chat .mes_text q, #chat .mes_text .rsty-say, .rsty-sample q, .rsty-sample .rsty-say',
+        think: '#chat .mes_text .rsty-think, .rsty-sample .rsty-think',
+        act: '#chat .mes_text em, #chat .mes_text i, .rsty-sample em',
+    };
+    const parts = [
+        `:root {\n${keys.map(k => `  --rsty-${k}: ${st[k]};`).join('\n')}\n}`,
+        rule('#chat .mes_text, .rsty-sample', { size: 'font-size', lh: 'line-height', ls: 'letter-spacing', 'font-body': 'font-family' }),
+        rule('#chat .mes_text p, .rsty-sample p', { gap: 'margin-bottom', indent: 'text-indent' }),
+        rule('#chat .mes_text :is(h1, h2, h3, h4, h5, h6), .rsty-sample h4', { 'font-title': 'font-family' }),
+        ...TY_ROLES.map(([r]) => rule(roleSel[r], { [`${r}-color`]: 'color', [`${r}-weight`]: 'font-weight', [`${r}-style`]: 'font-style', [`${r}-font`]: 'font-family' })),
+    ];
+    if (st.gap) parts.push('#chat .mes_text p, .rsty-sample p {\n  margin-top: 0;\n}');
+    return parts.filter(Boolean).join('\n');
+}
+
+function tySet(k, val, live) {
+    const st = tyState();
+    const next = val === null || val === undefined || val === '' ? '' : String(val);
+    if (tyOf(st, k) === next) return;
+    if (!live || !bz.varLive) bzPush();
+    bz.varLive = !!live;
+    if (next) st[k] = next;
+    else delete st[k];
+    const css = tyCss(st);
+    const at = bz.blocks.findIndex(b => b.name === TY_BLOCK);
+    if (!css) {
+        bz.blocks = bz.blocks.filter(b => b.name !== TY_BLOCK);
+    } else if (at < 0) {
+        bz.blocks.push(bzNewBlock(TY_BLOCK, css));
+    } else {
+        bz.blocks[at].text = css;
+        bz.blocks[at].off = false;
+        bz.blocks = bz.blocks.filter((b, i) => b.name !== TY_BLOCK || i === at);
+    }
+    bzChanged();
+}
+
+function tyMarks(k) {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue(`--rsty-${k}-marks`).trim().replace(/^["']|["']$/g, '');
+    const out = [];
+    for (let i = 0; i + 1 < raw.length; i += 2) out.push([raw[i], raw[i + 1]]);
+    return out;
+}
+
+const tyEsc = s => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+
+function tyRegex() {
+    const alt = pairs => pairs.map(([o, c]) => `${tyEsc(o)}[^${tyEsc(o)}${tyEsc(c)}\\n]{1,400}${tyEsc(c)}`).join('|') || '(?!)';
+    const think = tyMarks('think');
+    const say = tyMarks('say');
+    return think.length || say.length ? new RegExp(`(${alt(think)})|(${alt(say)})`, 'g') : null;
+}
+
+function tyWrap(el, re = tyRegex()) {
+    if (!el || !re) return;
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: n => (n.parentElement?.closest(TY_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes = [];
+    for (let n = w.nextNode(); n; n = w.nextNode()) if (n.data.trim()) nodes.push(n);
+    nodes.forEach(n => {
+        re.lastIndex = 0;
+        const text = n.data;
+        let m;
+        let last = 0;
+        const frag = document.createDocumentFragment();
+        while ((m = re.exec(text))) {
+            if (m.index > last) frag.append(text.slice(last, m.index));
+            const span = document.createElement('span');
+            span.className = m[1] ? 'rsty-think' : 'rsty-say';
+            span.textContent = m[0];
+            frag.append(span);
+            last = m.index + m[0].length;
+        }
+        if (!last) return;
+        if (last < text.length) frag.append(text.slice(last));
+        n.replaceWith(frag);
+    });
+}
+
+function tyRewrapAll() {
+    const re = tyRegex();
+    document.querySelectorAll('#chat .mes_text, .rsty-sample').forEach(el => {
+        if (el.querySelector('.rsty-think, .rsty-say')) {
+            el.querySelectorAll('.rsty-think, .rsty-say').forEach(s => s.replaceWith(...s.childNodes));
+            el.normalize();
+        }
+        tyWrap(el, re);
+    });
+}
+
+function tyRoleHtml(st, [r, label, hint]) {
+    const color = tyOf(st, `${r}-color`);
+    const tri = (k, on, name) => {
+        const cur = tyOf(st, `${r}-${k}`);
+        const txt = cur === on ? '是' : cur === 'normal' ? '否' : '默认';
+        return `<span class="rs_chip rs_ty_tri${cur ? ' rs_on' : ''}" data-k="${r}-${k}" data-on="${on}">${name}：${txt}</span>`;
+    };
+    const marks = r === 'think' ? TY_THINK_MARKS : r === 'say' ? TY_SAY_MARKS : [];
+    const curMarks = tyOf(st, `${r}-marks`).replace(/^["']|["']$/g, '');
+    const has = m => {
+        for (let i = 0; i + 1 < curMarks.length; i += 2) if (curMarks.slice(i, i + 2) === m) return true;
+        return false;
+    };
+    return `<div class="rs_ty_role" data-r="${r}">
+  <div class="rs_ty_rh"><b>${label}</b><span class="rs_ty_hint">${hint}</span></div>
+  <div class="rs_ty_rc"><span class="rs_rx_sw rs_ty_sw" data-k="${r}-color" style="--c:${escapeHtml(color || 'transparent')}"></span>${color ? `<span class="rs_icon fa-solid fa-xmark rs_ty_clr" data-k="${r}-color" title="跟随主题"></span>` : '<span class="rs_ty_hint">跟随主题</span>'}<span class="rs_bar_spacer"></span>${tri('weight', 'bold', '粗体')}${tri('style', 'italic', '斜体')}</div>
+  ${marks.length ? `<div class="rs_ty_rc"><span class="rs_ty_hint">${r === 'think' ? '这些括号里算心理' : '这些也算对话'}</span>${marks.map(m => `<span class="rs_chip rs_ty_mark${has(m) ? ' rs_on' : ''}" data-m="${escapeHtml(m)}">${escapeHtml(m)}</span>`).join('')}</div>` : ''}
+</div>`;
+}
+
+function tyRender() {
+    const st = tyState();
+    const $m = $('#rs_panel .rs_bz_main');
+    const slider = ([k, label, min, max, step, unit]) => {
+        const cur = tyOf(st, k);
+        const n = cur ? parseFloat(cur) : NaN;
+        return `<label class="rs_ty_sl" data-k="${k}" data-u="${unit}"><span>${label}</span><input type="range" class="rs_ty_r" min="${min}" max="${max}" step="${step}" value="${Number.isFinite(n) ? n : min}"><b>${cur || '默认'}</b>${cur ? `<span class="rs_icon fa-solid fa-xmark rs_ty_clr" data-k="${k}" title="恢复默认"></span>` : ''}</label>`;
+    };
+    const scroll = $m.find('.rs_ty_body').scrollTop() || 0;
+    $m.html(`<div class="rs_ty_body">
+  <div class="rs_ty_sample rsty-sample mes_text">${TY_SAMPLE}</div>
+  ${TY_ROLES.map(x => tyRoleHtml(st, x)).join('')}
+  <div class="rs_ty_role"><div class="rs_ty_rh"><b>段落</b><span class="rs_ty_hint">拖动时聊天里马上能看到</span></div>${TY_SLIDERS.map(slider).join('')}</div>
+</div>`);
+    $m.find('.rs_ty_body').scrollTop(scroll);
+    tyWrap($m.find('.rsty-sample')[0]);
+}
+
+function tyTri(el) {
+    const k = el.dataset.k;
+    const cur = tyOf(tyState(), k);
+    tySet(k, !cur ? el.dataset.on : cur === el.dataset.on ? 'normal' : '');
+    tyRender();
+}
+
+function tyMark(el) {
+    const r = el.closest('.rs_ty_role').dataset.r;
+    const m = el.dataset.m;
+    const cur = tyOf(tyState(), `${r}-marks`).replace(/^["']|["']$/g, '');
+    const pairs = [];
+    for (let i = 0; i + 1 < cur.length; i += 2) pairs.push(cur.slice(i, i + 2));
+    const next = pairs.includes(m) ? pairs.filter(x => x !== m) : [...pairs, m];
+    tySet(`${r}-marks`, next.length ? `"${next.join('')}"` : '');
+    tyRender();
+}
+
+function tySlide(el, done) {
+    const lab = el.closest('.rs_ty_sl');
+    const val = `${+Number(el.value).toFixed(3)}${lab.dataset.u}`;
+    tySet(lab.dataset.k, val, true);
+    $(lab).find('b').text(val);
+    if (!$(lab).find('.rs_ty_clr').length) $(lab).append(`<span class="rs_icon fa-solid fa-xmark rs_ty_clr" data-k="${lab.dataset.k}" title="恢复默认"></span>`);
+    if (done) bz.varLive = false;
+}
+
+function tyPickColor(el) {
+    const k = el.dataset.k;
+    bz.varLive = false;
+    cpOpen(tyOf(tyState(), k) || getComputedStyle(document.body).getPropertyValue('--SmartThemeQuoteColor').trim() || '#888888', {
+        onInput: c => {
+            tySet(k, rtFormat(c.a < 1 ? 'rgb' : 'hex', c), true);
+            el.style.setProperty('--c', rtFormat('rgb', c));
+        },
+        onDone: () => {
+            bz.varLive = false;
+            tyRender();
+        },
+    });
+}
+
+function tfFamilyFromUrl(url) {
+    const out = [];
+    try {
+        new URL(url).searchParams.getAll('family').forEach(f => out.push(f.split(':')[0].replace(/\+/g, ' ')));
+    } catch { }
+    return out;
+}
+
+function tfFonts() {
+    const fonts = [];
+    bz.blocks.filter(b => !b.off).forEach(b => {
+        bzItems(b.text).forEach(it => {
+            if (it.t !== 'r') return;
+            const own = TF_OWN.has(b.name);
+            if (/^@import/i.test(it.head)) {
+                const url = it.head.match(/url\(\s*["']?([^"')]+)|@import\s+["']([^"']+)/i);
+                const u = url?.[1] || url?.[2] || '';
+                tfFamilyFromUrl(u).forEach(name => fonts.push({ name, src: u, own, kind: '链接', text: it.text }));
+            } else if (/^@font-face/i.test(it.head)) {
+                const name = it.text.match(/font-family\s*:\s*["']?([^;"'}]+)/i)?.[1]?.trim();
+                const src = it.text.match(/url\(\s*["']?([^"')]+)/i)?.[1] || '';
+                if (name) fonts.push({ name, src, own, kind: '文件', text: it.text });
+            }
+        });
+    });
+    const seen = new Set();
+    return fonts.filter(f => !seen.has(f.name) && seen.add(f.name));
+}
+
+function tfRender() {
+    const st = tyState();
+    const fonts = tfFonts();
+    const $m = $('#rs_panel .rs_bz_main');
+    const sel = (k, label) => {
+        const cur = tyOf(st, k).replace(/^["']|["'].*$/g, '');
+        return `<label class="rs_ty_fsel"><span>${label}</span><select class="text_pole rs_tf_use" data-k="${k}"><option value="">跟随主题</option>${fonts.map(f => `<option value="${escapeHtml(f.name)}"${f.name === cur ? ' selected' : ''}>${escapeHtml(f.name)}</option>`).join('')}${cur && !fonts.some(f => f.name === cur) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : ''}</select></label>`;
+    };
+    $m.html(`<div class="rs_ty_body">
+  <div class="rs_ty_sample rsty-sample mes_text">${TY_SAMPLE}</div>
+  <div class="rs_ty_role"><div class="rs_ty_rh"><b>用在哪</b></div>${sel('font-body', '正文')}${sel('say-font', '对话')}${sel('font-title', '标题')}</div>
+  <div class="rs_ty_role"><div class="rs_ty_rh"><b>字体</b><span class="rs_ty_hint">${fonts.length ? `${fonts.length} 种` : '还没有，下面加一个'}</span></div>
+    ${fonts.map(f => `<div class="rs_tf_row"><span class="rs_tf_name" style="font-family:&quot;${escapeHtml(f.name)}&quot;">${escapeHtml(f.name)} 字体预览 Aa</span><span class="rs_pz_cat_tag">${f.own ? f.kind : '你的 CSS'}</span>${f.own ? `<span class="rs_icon fa-solid fa-trash-can rs_tf_del" data-n="${escapeHtml(f.name)}" title="删掉"></span>` : ''}</div>`).join('')}
+    <div class="rs_bz_foot rs_tf_add"><input type="url" class="rs_tf_url" placeholder="Google Fonts 链接，或 .ttf / .woff2 文件链接"></div>
+    <div class="rs_bz_foot rs_tf_add"><input type="text" class="rs_tf_name_in" placeholder="字体名（文件链接要填，Google 链接可以不填）"><span class="rs_pz_card_btn rs_tf_addbtn">加上</span></div>
+    <div class="rs_bz_foot rs_tf_add"><span class="rs_pz_card_btn rs_tf_up">上传字体文件</span><span class="rs_ty_hint">ttf / otf / woff / woff2，存在酒馆的用户文件里</span><input type="file" class="rs_tf_file" accept=".ttf,.otf,.woff,.woff2" hidden></div>
+  </div>
+</div>`);
+    tyWrap($m.find('.rsty-sample')[0]);
+}
+
+function tfPutBlock(name, line) {
+    const b = bz.blocks.find(x => x.name === name);
+    if (b) b.text = [b.text.trimEnd(), line].filter(Boolean).join('\n');
+    else if (name === TF_BLOCK) bz.blocks.unshift(bzNewBlock(name, line));
+    else bz.blocks.push(bzNewBlock(name, line));
+}
+
+function tfAdd(url, name) {
+    url = String(url || '').trim();
+    name = String(name || '').trim().replace(/["';{}]/g, '');
+    if (!/^(?:https?:\/\/|\/)/i.test(url)) return toastr.warning('填一个字体链接');
+    const file = TY_FONT_EXT.test(url);
+    if (file && !name) return toastr.warning('文件链接要填字体名');
+    const fam = file ? [name] : name ? [name] : tfFamilyFromUrl(url);
+    if (!fam.length) return toastr.warning('认不出字体名，填一下名字');
+    if (tfFonts().some(f => fam.includes(f.name))) return toastr.info('已经有这个字体了');
+    const fmt = { ttf: 'truetype', otf: 'opentype', woff: 'woff', woff2: 'woff2' }[url.match(TY_FONT_EXT)?.[0].replace(/[?#].*$/, '').slice(1).toLowerCase()] || '';
+    const line = file
+        ? `@font-face {\n  font-family: "${name}";\n  src: url("${url}")${fmt ? ` format("${fmt}")` : ''};\n  font-display: swap;\n}`
+        : `@import url("${url}");`;
+    bzPush();
+    tfPutBlock(file ? TFF_BLOCK : TF_BLOCK, line);
+    bzChanged();
+    tfRender();
+    toastr.success(`加上了「${fam.join('、')}」，在上面选用在哪`);
+    return true;
+}
+
+function tfDel(name) {
+    const hit = it => (/^@import/i.test(it.head)
+        ? tfFamilyFromUrl(it.head.match(/url\(\s*["']?([^"')]+)/i)?.[1] || '').includes(name)
+        : new RegExp(`font-family\\s*:\\s*["']?${tyEsc(name)}["']?\\s*;`, 'i').test(it.text));
+    bzPush();
+    bz.blocks.filter(b => TF_OWN.has(b.name)).forEach(b => {
+        b.text = bzItems(b.text).filter(it => !hit(it)).map(it => it.text).join('\n');
+    });
+    bz.blocks = bz.blocks.filter(b => !TF_OWN.has(b.name) || b.text.trim());
+    bzChanged();
+    tfRender();
+}
+
+async function tfUpload(file) {
+    if (!file) return;
+    const ext = file.name.match(/\.(ttf|otf|woff2?)$/i)?.[1]?.toLowerCase();
+    if (!ext) return toastr.warning('只能上传 ttf / otf / woff / woff2');
+    const name = file.name.replace(/\.[^.]+$/, '').replace(/["';{}]/g, '').trim() || '我的字体';
+    const data = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result).split(',')[1] || '');
+        r.onerror = rej;
+        r.readAsDataURL(file);
+    }).catch(() => '');
+    if (!data) return toastr.error('读不了这个文件');
+    let path = '';
+    try {
+        path = (await postJson('/api/files/upload', { name: `rsfont_${Date.now()}.${ext}`, data })).path || '';
+    } catch (e) {
+        console.error('[重生成拼接] 字体上传失败', e);
+    }
+    if (!path) return toastr.error('上传失败，可以换成字体链接');
+    tfAdd(path.startsWith('/') ? path : `/${path}`, name);
 }
 
 function rxCloseEd() {
@@ -7204,6 +7521,29 @@ function bindPanelEvents() {
         .on('click', '#rs_panel .rs_bz_theme', () => {
             bz.themeAdd = !bz.themeAdd;
             bzRootRender();
+        })
+        .on('click', '#rs_panel .rs_ty_sw', function () { tyPickColor(this); })
+        .on('click', '#rs_panel .rs_ty_clr', function () {
+            bz.varLive = false;
+            tySet(this.dataset.k, '');
+            tyRender();
+        })
+        .on('click', '#rs_panel .rs_ty_tri', function () { tyTri(this); })
+        .on('click', '#rs_panel .rs_ty_mark', function () { tyMark(this); })
+        .on('input', '#rs_panel .rs_ty_r', function () { tySlide(this, false); })
+        .on('change', '#rs_panel .rs_ty_r', function () { tySlide(this, true); })
+        .on('change', '#rs_panel .rs_tf_use', function () {
+            bz.varLive = false;
+            tySet(this.dataset.k, this.value ? `"${this.value}"` : '');
+        })
+        .on('click', '#rs_panel .rs_tf_addbtn', () => tfAdd($('#rs_panel .rs_tf_url').val(), $('#rs_panel .rs_tf_name_in').val()))
+        .on('click', '#rs_panel .rs_tf_del', async function () {
+            if (await askConfirm(`删掉字体「${this.dataset.n}」？写回之前都能撤回`)) tfDel(this.dataset.n);
+        })
+        .on('click', '#rs_panel .rs_tf_up', () => $('#rs_panel .rs_tf_file').trigger('click'))
+        .on('change', '#rs_panel .rs_tf_file', function () {
+            tfUpload(this.files?.[0]);
+            this.value = '';
         })
         .on('click', '#rs_panel .rs_bz_themebox .rs_chip', function () {
             if (this.classList.contains('rs_off')) return toastr.info('已经加过了');
