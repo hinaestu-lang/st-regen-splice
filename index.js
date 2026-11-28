@@ -35,6 +35,7 @@ const DEFAULTS = {
     jumpBar: true,
     holdScroll: true,
     clicheWhole: true,
+    pzDividers: '',
     clicheWords: [
         '猎人', '猎物', '共犯', '极其', '居高临下', '语气', '这是一个', '那是一个',
         '投石', '/投入.{0,8}(石子|石头)/', '/石子.{0,8}(湖|水)面/',
@@ -2648,7 +2649,7 @@ const PZ_PREVIEW = 46;
 const PZ_UNDO = 50;
 const PZ_CARD_MIN = 160;
 const PZ_DIVIDER = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#-]{2,}/;
-const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』-]+/g;
+const PZ_DECOR = /[━═─—–=~～☆★◆◇■□●○◎▼▲◀▶✦✧❖❀✿♡♥·•*#【】\[\]〔〕「」『』┌┐└┘├┤┬┴┼│┃‖║╔╗╚╝╠╣═╭╮╰╯|-]+/g;
 const PZ_ROLES = [['system', '系统'], ['user', '用户'], ['assistant', 'AI']];
 
 const pz = { src: null, tgt: null, files: [], last: {}, sel: new Set(), tl: [], open: new Set(), hunks: {}, catf: {}, tokOn: false, tokSort: false, tokCache: new Map(), sch: false, cmpTimer: 0, unfold: new Set(), pos: 'end', picking: false, editing: null };
@@ -2729,8 +2730,22 @@ function pzFromPreset(preset) {
     return pzClassify(list);
 }
 
-const pzIsDivider = e => !e.marker && PZ_DIVIDER.test(e.name);
-const pzCatName = n => n.replace(PZ_DECOR, ' ').replace(/[\p{Extended_Pictographic}️‍⬇⬆↓↑▽△]/gu, ' ').replace(/\s+/g, ' ').trim();
+let pzDivCache = { src: null, rules: [] };
+
+function pzDivRules() {
+    const src = String(settings().pzDividers || '');
+    if (pzDivCache.src === src) return pzDivCache.rules;
+    const rules = src.split('\n').map(x => x.trim()).filter(Boolean).map(line => {
+        const m = line.match(/^\/(.+)\/([a-z]*)$/);
+        if (!m) return { text: line };
+        try { return { re: new RegExp(m[1], m[2].replace(/[gy]/g, '')) }; } catch { return null; }
+    }).filter(Boolean);
+    pzDivCache = { src, rules };
+    return rules;
+}
+
+const pzIsDivider = e => !e.marker && (PZ_DIVIDER.test(e.name) || pzDivRules().some(r => (r.re ? r.re.test(e.name) : e.name.includes(r.text))));
+const pzCatName = n => pzDivRules().reduce((t, r) => (r.text ? t.split(r.text).join(' ') : t), n).replace(PZ_DECOR, ' ').replace(/[\p{Extended_Pictographic}️‍⬇⬆↓↑▽△]/gu, ' ').replace(/\s+/g, ' ').trim();
 
 function pzClassify(list) {
     let group = '';
@@ -6717,6 +6732,11 @@ function renderSettings() {
       </label>
       <label>正文标签（“只编辑正文”时只留这个标签里的内容，比如 content）<input type="text" id="rs_body_tag" class="text_pole"></label>
       <label>每一项最多留存的存档数<input type="number" id="rs_snap_keep" class="text_pole" min="2"></label>
+      <div class="rs_set_h">预设缝合</div>
+      <label>分类标题的写法（一行一种；条目名里有这段字就当成分类，比如 ‖ 或 【分类】；用 /.../ 包起来是正则，比如 /^┌.*┐$/）。━━、═══、☆☆ 这种连着的符号不用写，本来就能认出来
+        <textarea id="rs_pz_divs" class="text_pole" rows="4" placeholder="‖&#10;/^┌.*┐$/"></textarea>
+      </label>
+      <div class="rs_set_note rs_pz_divs_n"></div>
       <div class="rs_set_h">聊天文件</div>
       <div class="rs_set_note">迁移后坏掉、只在欢迎页显示的聊天，可以在这里找出来删掉</div>
       <div class="menu_button rs_cc_load">检查聊天文件</div>
@@ -6816,6 +6836,18 @@ function renderSettings() {
         ctx().saveSettingsDebounced();
         if (!this.checked) scr.held = false;
     });
+    const divCount = () => {
+        const live = ctx().getPresetManager?.('openai')?.getPresetList?.()?.settings;
+        const cats = pzFromPreset({ prompts: live?.prompts || [], prompt_order: live?.prompt_order || [] }).filter(e => e.div).map(e => pzCatName(e.name) || e.name.trim());
+        $('#rs_panel .rs_pz_divs_n').text(cats.length ? `当前预设认出 ${cats.length} 个分类：${cats.slice(0, 12).join('、')}${cats.length > 12 ? '…' : ''}` : '当前预设没认出分类');
+    };
+    $('#rs_pz_divs').val(s.pzDividers).on('input', function () {
+        settings().pzDividers = this.value;
+        ctx().saveSettingsDebounced();
+        if (pz.src?.entries) pzClassify(pz.src.entries);
+        divCount();
+    });
+    divCount();
     $('#rs_cliche_on').prop('checked', s.clicheOn).on('change', function () { setClicheSetting('clicheOn', this.checked); });
     $('#rs_cliche_whole').prop('checked', s.clicheWhole).on('change', function () { setClicheSetting('clicheWhole', this.checked); });
     $('#rs_cliche_words').val(s.clicheWords).on('input', function () { setClicheSetting('clicheWords', this.value); });
